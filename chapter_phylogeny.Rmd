@@ -1,0 +1,210 @@
+# Phylogenetic reconstruction
+
+The phylogenies based on CNV and mutations are shown below. Some of these results are multi-clonal, and highlighted with different colorings. The mcommon ancestor node is expected to have a CCF of 1 in both the DCIS and the IDC.
+
+```{r}
+# get Phylogeny
+
+# plot CCF Sample1 vs Sample 2, and highlight the number of CNVs and mutations in each?
+# do you need to normalise the number of mutations?
+
+for (i in 1:length(CCFs)){
+  CCFs[[i]]$xend=CCFs[[i]]$Sample.1CCF[match(CCFs[[i]]$Parent, CCFs[[i]]$Node)]
+  CCFs[[i]]$yend=CCFs[[i]]$Sample.2CCF[match(CCFs[[i]]$Parent, CCFs[[i]]$Node)]
+}
+
+M2DCIS=melt(CCFs, measure.vars="Node")
+M2DCIS=M2DCIS[-which(M2DCIS$value==0), ]
+x1m=which(M2DCIS$xend==0 & M2DCIS$yend==0)
+M2DCIS$xend[x1m]=1
+M2DCIS$yend[x1m]=1
+
+M2DCIS$evolutionaryTime=M2DCIS$Parent
+lx1=M2DCIS$Parent
+ind1=paste(lx1, M2DCIS$L1)
+ind2=paste(M2DCIS$value, M2DCIS$L1)
+lx3=M2DCIS$Parent[ match(ind1, ind2)]
+M2DCIS$evolutionaryTime[which(lx3==1)]=2
+M2DCIS$evolutionaryTime[which(lx3==0)]=1
+M2DCIS$evolutionaryTime[which(lx3>1)]=3
+
+## shows multi-phylogeny plots
+
+ggplot(M2DCIS, aes(x=log10(Sample.1CCF+0.01), y=log10(Sample.2CCF+0.01),fill=log10(CNVs+1)))+geom_point(aes(size=(M2DCIS$SSMs)))+xlab("DCIS ccf")+ylab("IDC ccf")+scale_fill_gradient(low="#ffffbf", high="#d53e4f")+facet_wrap(~M2DCIS$L1, ncol=3)+
+  geom_segment(aes(x=log10(M2DCIS$xend+0.01) ,y = log10(M2DCIS$yend+0.01) ,xend = log10(M2DCIS$Sample.1CCF+0.01) , yend=log10(M2DCIS$Sample.2CCF+0.01), col=factor(M2DCIS$chain)),  arrow=arrow(type="closed", length=unit(0.30,"cm")))
+
+## commented out: 
+#ggplot(M2DCIS, aes(x=log10(Sample.1CCF+0.01), y=log10(Sample.2CCF+0.01),col=log10(CNVs+1)))+geom_point(aes(size=(M2DCIS$SSMs)))+geom_text(aes(label=value), col="black", nudge_x = 0.05, nudge_y = 0.05)+xlab("DCIS ccf")+ylab("IDC ccf")+scale_color_gradient(low="#ffffbf", high="#d53e4f")+facet_wrap(~M2DCIS$L1)+
+# geom_segment(aes(x=log10(M2DCIS$xend+0.01) ,y = log10(M2DCIS$yend+0.01) ,xend = log10(M2DCIS$Sample.1CCF+0.01) , yend=log10(M2DCIS$Sample.2CCF+0.01) ),  arrow=arrow(type="closed", length=unit(0.30,"cm")))
+
+```
+
+```{r, eval=F}
+ggplot(M2DCIS, aes(x=evolutionaryTime, y=CNVs,fill=factor(value)))+geom_bar(stat="identity")+facet_wrap(~M2DCIS$L1, ncol=3)
+  
+ggplot(M2DCIS, aes(x=evolutionaryTime, y=SSMs,fill=factor(value)))+geom_bar(stat="identity")+facet_wrap(~M2DCIS$L1, ncol=3)
+
+```
+
+
+```{r}
+#Look only at clusters which have a CCF greather than 10\% at either the DCIS or IDC stage: What is unique about them?
+
+# FindThese=sapply(CCFs, function(x) x$Node[which(x$Sample.1CCF>0.05 | x$Sample.2CCF>0.05)])
+# GMuts=lapply(1:length(CCFs), function(x) ClonalMuts[[x]][which(ClonalMuts[[x]]$L1%in%FindThese[[x]]), ] )
+
+
+## map to the genome?
+#seqlevelsStyle(tx37)="UCSC"
+
+TxSubsClones=lapply(ClonalMuts, function(x) GRanges(seqnames= as.character(x$chr), ranges=IRanges(start=x$start.bp, end=x$end.bp), node=x$L1))
+GetGenes2=lapply(TxSubsClones, function(x) findOverlaps(x, tx37))
+GetGenes3=lapply(GetGenes2, function(x) tx37[subjectHits(x)])
+GetGenes4=lapply(1:length(GetGenes2), function(x) TxSubsClones[[x]][queryHits(GetGenes2[[x]])])
+for (i in 1:length(GetGenes2)){
+  GetGenes4[[i]]$Gene <- GetGenes3[[i]]$HUGO
+}
+
+## extract the point mutations in each case:
+Lwdith=lapply(GetGenes4, width)
+Sx1=lapply(Lwdith, function(x) which(x==1))
+MutOnlyCCFs=lapply(1:length(GetGenes4),function(x) GetGenes4[[x]][Sx1[[x]]])
+
+
+## also annotate with oncogenes
+GeneIdsSumm=lapply(MutOnlyCCFs, function(x) data.frame(node=x$node, Gene=x$Gene, chr=as.character(seqnames(x)), start.bp=start(ranges(x))))
+
+
+MatchIdx=lapply(1:6, function(x) match(paste(GeneIdsSumm[[x]]$chr,GeneIdsSumm[[x]]$start.bp), paste(Mutall2[[(2*x)-1]]$Chromosome,Mutall2[[(2*x)-1]]$Start_position)))
+MatchIdx2=lapply(1:6, function(x) match(paste(GeneIdsSumm[[x]]$chr, GeneIdsSumm[[x]]$start.bp), paste(Mutall2[[(2*x)]]$Chromosome,Mutall2[[(2*x)]]$Start_position)))
+
+# also include predicted neoantigens?
+## EDIT THIS PART!!
+
+MatchIdxB=lapply(1:6, function(x) match(paste(substr(GeneIdsSumm[[x]]$chr, 4, 5),GeneIdsSumm[[x]]$start.bp), paste(NeoList[[(2*x)-1]]$Chromosome,NeoList[[(2*x)-1]]$Start_position)))
+MatchIdx2B=lapply(1:6, function(x) match(paste(substr(GeneIdsSumm[[x]]$chr, 4, 5),GeneIdsSumm[[x]]$start.bp), paste(NeoList[[(2*x)]]$Chromosome,NeoList[[(2*x)]]$Start_position)))
+
+
+##Mutall=Mutall2
+## note: extract the counts from the data file, rather than from the mutall file!
+
+
+
+for (i in 1:6){
+  MutOnlyCCFs[[i]]$Variant1 <- as.character(Mutall2[[(2*i)-1]]$Variant_Classification[unlist(MatchIdx[i])])
+  MutOnlyCCFs[[i]]$Variant2 <- as.character(Mutall2[[(2*i)]]$Variant_Classification[unlist(MatchIdx2[i])])
+  MutOnlyCCFs[[i]]$rsSNP1 <- as.character(Mutall2[[(2*i)-1]]$dbSNP_RS[unlist(MatchIdx[i])])
+  MutOnlyCCFs[[i]]$rsSNP2 <- as.character(Mutall2[[(2*i)]]$dbSNP_RS[unlist(MatchIdx2[i])])
+  MutOnlyCCFs[[i]]$VariantCons <- ifelse(is.na(MutOnlyCCFs[[i]]$Variant1), MutOnlyCCFs[[i]]$Variant2, MutOnlyCCFs[[i]]$Variant1)
+  MutOnlyCCFs[[i]]$VariantFunct<-ifelse(MutOnlyCCFs[[i]]$VariantCons%in%SeqOnt, 1, 0)
+  MutOnlyCCFs[[i]]$rsSNP <- ifelse(is.na(MutOnlyCCFs[[i]]$rsSNP1), MutOnlyCCFs[[i]]$rsSNP2, MutOnlyCCFs[[i]]$rsSNP1)
+  MutOnlyCCFs[[i]]$Neoanti1 <-as.character(NeoList[[(2*i)-1]]$Binder[unlist(MatchIdxB[i])])
+  MutOnlyCCFs[[i]]$Neoanti2 <-as.character(NeoList[[(2*i)]]$Binder[unlist(MatchIdx2B[i])])
+  MutOnlyCCFs[[i]]$Neoantigen <-ifelse(is.na(MutOnlyCCFs[[i]]$Neoanti1), MutOnlyCCFs[[i]]$Neoanti2, MutOnlyCCFs[[i]]$Neoanti1)
+  MutOnlyCCFs[[i]]$VariantCons <-gsub("NA","", MutOnlyCCFs[[i]]$VariantCons)
+  MutOnlyCCFs[[i]]$rsSNP <-gsub("NA","", MutOnlyCCFs[[i]]$rsSNP)
+  MutOnlyCCFs[[i]]$Neoantigen[which(is.na(MutOnlyCCFs[[i]]$Neoantigen) & !is.na(MutOnlyCCFs[[i]]$VariantCons))]=""
+  MutOnlyCCFs[[i]]$Oncogene<-MutOnlyCCFs[[i]]$Gene%in%OncoList$Gene.Symbol
+  MutOnlyCCFs[[i]]$TumAltDCIS<-Mutall2[[(2*i)-1]]$t_alt_count[unlist(MatchIdx[i])]
+  MutOnlyCCFs[[i]]$TumTotDCIS<-Mutall2[[(2*i)-1]]$t_ref_count[unlist(MatchIdx[i])]
+  MutOnlyCCFs[[i]]$NormAltDCIS<-Mutall2[[(2*i)-1]]$n_alt_count[unlist(MatchIdx[i])]
+  MutOnlyCCFs[[i]]$NormTotDCIS<-Mutall2[[(2*i)-1]]$n_ref_count[unlist(MatchIdx[i])]
+  MutOnlyCCFs[[i]]$TumAltIDC<-Mutall2[[(2*i)]]$t_alt_count[unlist(MatchIdx2[i])]
+  MutOnlyCCFs[[i]]$TumTotIDC<-Mutall2[[(2*i)]]$t_ref_count[unlist(MatchIdx2[i])]
+  MutOnlyCCFs[[i]]$NormAltIDC<-Mutall2[[(2*i)]]$n_alt_count[unlist(MatchIdx2[i])]
+  MutOnlyCCFs[[i]]$NormTotIDC<-Mutall2[[(2*i)]]$n_ref_count[unlist(MatchIdx2[i])]
+#  MutOnlyCCFs[[i]]$gcContentDCIS<-Mutall[[(2*i)-1]]$gc_content[unlist(MatchIdx[i])] ## estimate gc content in a given context??
+#  MutOnlyCCFs[[i]]$gcContentIDC<-Mutall[[(2*i)]]$gc_content[unlist(MatchIdx2[i])]
+  # do the test here
+  ProbDCIS=MutOnlyCCFs[[i]]$TumAltDCIS/(MutOnlyCCFs[[i]]$TumTotDCIS+MutOnlyCCFs[[i]]$TumAltDCIS)
+  MutOnlyCCFs[[i]]$NormRefDCIScrit=qnbinom(0.95, 2, ProbDCIS)
+  ProbIDC=MutOnlyCCFs[[i]]$TumAltIDC/(MutOnlyCCFs[[i]]$TumTotIDC+MutOnlyCCFs[[i]]$TumAltIDC)
+  MutOnlyCCFs[[i]]$NormRefIDCcrit=qnbinom(0.95, 2, ProbIDC)
+  MutOnlyCCFs[[i]]$NormDCIScritY=MutOnlyCCFs[[i]]$NormRefDCIScrit<(MutOnlyCCFs[[i]]$NormTotDCIS+MutOnlyCCFs[[i]]$NormAltDCIS)
+  MutOnlyCCFs[[i]]$NormIDCcritY=MutOnlyCCFs[[i]]$NormRefIDCcrit<(MutOnlyCCFs[[i]]$NormTotIDC+MutOnlyCCFs[[i]]$NormAltIDC)
+  MutOnlyCCFs[[i]]$Normcrit=MutOnlyCCFs[[i]]$NormIDCcritY==T|MutOnlyCCFs[[i]]$NormDCIScritY
+}
+
+
+
+GeneIdsSumm=lapply(MutOnlyCCFs[1:6], function(x) data.frame(node=x$node, Gene=x$Gene, chr=as.character(seqnames(x)), Start_position=start(ranges(x)), Variant=x$VariantCons, #gcDCIS=x$gcContentDCIS, gcIDC=x$gcContentIDC,
+                   rsSNP=x$rsSNP, Oncogene=x$Oncogene, TumAltDCIS=x$TumAltDCIS,
+                   TumTotDCIS=x$TumTotDCIS, NormAltDCIS=x$NormAltDCIS, NormTotDCIS=x$NormTotDCIS, 
+                   TumAltIDC=x$TumAltIDC,Neoantigen=x$Neoantigen,
+                   TumTotIDC=x$TumTotIDC, NormAltIDC=x$NormAltIDC, NormTotIDC=x$NormTotIDC,
+                   NormCritDCIS=x$NormRefDCIScrit, NormCritIDC=x$NormRefIDCcrit,
+                   DCISIDCAbsent=x$Normcrit))
+
+## Annotate with Mutall information -> are these functional or non functional variants?
+
+# Do a table of mutations at each step:
+#table(GeneIdsSumm[[1]][ ,1])
+#table(GeneIdsSumm[[2]][ ,1])
+
+## Now extract the genomic region at each point?
+seqlevelsStyle(CytoGR)="UCSC"
+GetCyto2=lapply(TxSubsClones, function(x) findOverlaps(x, CytoGR))
+GetCyto3=lapply(GetCyto2, function(x) CytoGR[subjectHits(x)])
+GetCyto4=lapply(1:length(GetCyto2), function(x) TxSubsClones[[x]][queryHits(GetCyto2[[x]])])
+for (i in 1:length(GetCyto2)){
+  GetCyto4[[i]]$Region <- GetCyto3[[i]]$Reg
+}
+## Extract just genomic regions
+Lwidth=lapply(GetCyto4,width)
+Sx1=lapply(Lwidth, function(x) which(x>1))
+CNVCCFs=lapply(1:length(GetCyto4),function(x) GetCyto4[[x]][Sx1[[x]]])
+CNVSumm=lapply(CNVCCFs, function(x) cbind(x$node, x$Region, as.character(seqnames(x)), start(ranges(x)), end(ranges(x)), sapply(strsplit(x$Region, "\\."), function(y) y[1])))
+
+# Write all the tables to file
+names(GeneIdsSumm)=c("Case1", "Case2","Case3","Case5","Case8","Case9") 
+mGeneIdsSumm=melt(GeneIdsSumm, measure.var=c("node"))
+
+```
+
+Color code the nodes and the branches according to the number of mutations and CNVs occurring at each node. Darker red indicates more CNVs, whereas a lrger node size indicates more mutations. It appears that (especially in case 1 and 3) the CNVs are earlier events. The terminal nodes may have higher number of mutations. 
+
+```{r}
+FracNode=lapply(MutOnlyCCFs[1:6], function(x) table(x$node, x$VariantFunct))
+FracNode2=lapply(FracNode, function(x) x[ ,2]/sum(x[ ,2]))
+names(FracNode2)=names(CCFs)[1:6]
+mFrac=cbind(node=substr(names(unlist(FracNode2)), 7, 8), melt(FracNode2))
+
+M2DCIS$FracNode=NA
+M2DCIS$FracNode=mFrac$value[match( paste(M2DCIS$L1, M2DCIS$value), paste(mFrac$L1, mFrac$node))]
+
+ggplot(M2DCIS, aes(x=log10(Sample.1CCF+0.01), y=log10(Sample.2CCF+0.01),col=log10(CNVs+1)))+geom_point(aes(size=(M2DCIS$FracNode)))+geom_text(aes(label=value), col="black", nudge_x = 0.05, nudge_y = 0.05)+xlab("DCIS ccf")+ylab("IDC ccf")+scale_color_gradient(low="#ffffbf", high="#d53e4f")+facet_wrap(~M2DCIS$L1, ncol=3)+
+  geom_segment(aes(x=log10(M2DCIS$xend+0.01) ,y = log10(M2DCIS$yend+0.01) ,xend = log10(M2DCIS$Sample.1CCF+0.01) , yend=log10(M2DCIS$Sample.2CCF+0.01) ),  arrow=arrow(type="closed", length=unit(0.30,"cm")))
+
+```
+
+We can also divide the nodes according to when they appear: Are they primary nodes, secondary, tertiary or the final leaf nodes. Do later nodes do have a higher frequency of mutations? It appears this is not the case.
+
+```{r, fig.width=5}
+table(M2DCIS$evolutionaryTime)
+boxplot(M2DCIS$FracNode~M2DCIS$evolutionaryTime)
+t.test(M2DCIS$FracNode[M2DCIS$evolutionaryTime==1], M2DCIS$FracNode[M2DCIS$evolutionaryTime==2])
+```
+
+When do the predicted neoantigens appear in these evolutionary trees?
+
+```{r}
+lx1=which(mGeneIdsSumm$Gene%in%NeoListExprMelt$Gene)
+
+mGeneIdsSumm[lx1, ]
+
+```
+
+
+Append this data (node data) to the mutational information acquired previously and save as Table S4
+
+```{r}
+lx1=paste(mGeneIdsSumm$Gene, mGeneIdsSumm$Start_position)
+lx2=paste(AllMutDataMelt$Hugo_Symbol, AllMutDataMelt$Start_position)
+
+idx1=match(lx2, lx1)
+
+AllMutDataMelt$Node=NA
+AllMutDataMelt$Node=mGeneIdsSumm$value[idx1]
+
+write.table(AllMutDataMelt, file=sprintf("rslt/TableS4_Recurrence_Mutations_Neoantigen_Annotated_%s.txt", Sys.Date()), sep="\t", row.names = F, quote=F)
+```

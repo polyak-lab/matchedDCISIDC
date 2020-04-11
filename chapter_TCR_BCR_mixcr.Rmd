@@ -1,0 +1,262 @@
+# TCR and BCR repertoire
+## Clonotype composition in each sample
+
+TCR and BCR were filtered to ensure an amino acid sequence of at least 6 aa, and have at least 2 counts.
+
+We filtered for clonotypes which account for at least 1$\% of the total population in each case. For example, below is case 8 which shows that 8IDC stroma is probably more diverse than 8DCIS or 8IDC since the major clonotypes only make up 12\% of the repertoire.
+
+Colored are clonotypes which are shared between samples: For example, "CMQRLDFPLTF" in light green expands in DCIS to IDC. 
+
+```{r, message=F}
+
+BFreq2=sapply(BNew, function(x) x$cloneCount/sum(x$cloneCount))
+TFreq2=sapply(TNew, function(x) x$cloneCount/sum(x$cloneCount))
+
+BFreqMelt=melt(BNew)		
+TFreqMelt=melt(TNew)
+
+BFreqMelt=cbind(BFreqMelt, melt(BFreq2))
+TFreqMelt=cbind(TFreqMelt, melt(TFreq2))
+
+colnames(BFreqMelt)=c("aaSeqCDR3", "var", "Count", "L1", "Frac", "Samp")
+BFreqMelt$seq=ifelse(BFreqMelt$Frac>0.1, BFreqMelt$aaSeqCDR3, "")
+
+colnames(TFreqMelt)=c("aaSeqCDR3", "var", "Count", "L1", "Frac", "Samp")
+TFreqMelt$seq=ifelse(TFreqMelt$Frac>0.1, TFreqMelt$aaSeqCDR3, "")
+
+mx1=list(dcis8=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="8DCIS v1"], 
+         idc8=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="8IDC v1"],
+         dcisStr=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="8DCIS stroma"],
+         idcStr=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="8IDC stroma"])
+
+
+par(mfrow=c(1,2))         
+venn(mx1)
+
+## check if the frequencies of these conserved or shared mutations change in the different cases
+
+dupValues=c(intersect(mx1[[1]], mx1[[2]]),intersect(mx1[[2]], mx1[[4]]), intersect(mx1[[1]], mx1[[4]]),
+            intersect(mx1[[2]], mx1[[3]]))
+  
+
+## Make bar plots of 
+XSearch=BFreqMelt[which(BFreqMelt$aaSeqCDR3%in%dupValues), ]
+XSearch2=XSearch[ grep("8", XSearch$Samp),]
+XSearch2$Samp[which(XSearch2$Samp=="8IDC stroma")]="8IDCstroma"
+
+lx1=which(XSearch2$Frac>0.01)
+NamesLx1=XSearch2$aaSeqCDR3[lx1]
+
+XSearch2$aaSeqCDR3_rep=XSearch2$aaSeqCDR3
+XSearch2$aaSeqCDR3[-which(XSearch2$aaSeqCDR3%in%NamesLx1)]=""
+#[XSearch2$Samp!="8IDCstroma", ]
+ggplot(XSearch2, aes(x=Samp, y=Frac, fill=aaSeqCDR3, group=aaSeqCDR3))+geom_bar(stat="identity", col="black", size=0.2)+theme_minimal()+
+  scale_fill_manual(values=c("white",  colsIn3))
+```
+
+Also check for case 9: We see the 9DCIS is less diverse than the IDC, however, this could also be attributed to lower read depth.
+
+There are certain clonotypes eg. "CMQALQTPYTF" and "CMQGLETPYTF" which are present in almost all samples. 
+
+```{r}
+mx1=list(dcis9=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="9DCIS v1"], 
+         idc9=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="9IDC v1"],
+         dcisStr=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="9DCIS stroma"],
+         idcStr=BFreqMelt$aaSeqCDR3[BFreqMelt$Samp=="9IDC stroma"])
+
+## check if the frequencies of these conserved or shared mutations change in the different cases
+
+dupValues=c(intersect(mx1[[1]], mx1[[2]]),intersect(mx1[[2]], mx1[[4]]), intersect(mx1[[1]], mx1[[4]]),
+            intersect(mx1[[2]], mx1[[3]]))
+  
+XSearch=BFreqMelt[which(BFreqMelt$aaSeqCDR3%in%dupValues), ]
+XSearch2=XSearch[ grep("9", XSearch$Samp),]
+XSearch2$Samp[which(XSearch2$Samp=="9IDC stroma")]="9IDCstroma"
+XSearch2$aaSeqCDR3_rep=XSearch2$aaSeqCDR3
+
+lx1=which(XSearch2$Frac>0.01)
+NamesLx1=XSearch2$aaSeqCDR3[lx1]
+
+XSearch2$aaSeqCDR3[-which(XSearch2$aaSeqCDR3%in%NamesLx1)]=""
+
+ggplot(XSearch2, aes(x=Samp, y=Frac, fill=aaSeqCDR3, group=aaSeqCDR3))+geom_bar(stat="identity", col="black", size=0.2)+theme_minimal()+   scale_fill_manual(values=c("white", colsIn3))
+```
+
+
+## changes in diversity
+
+Here, the shannon equitability index was used to determine the clonotype diversity in each sample. Error bars are calculated by bootstrapping 1000 times. 
+
+Here, 1 indicates DCIS and 2 indicates IDC. In case 9, the diversity increases in IDC, suggesting there is less of a clonal expansion. In case 8, the diversity drops in the IDC tumr suggesting there is clonal expansion of a particular BCR.  
+
+```{r, fig.width=5, cache=T}
+#UNSamp=unique(BFreqMelt$Samp)
+
+#calc diversity
+SIdx=sapply(BFreq2, function(x) -sum(x*log(x)))
+#calc max diversity
+SMax=sapply(BFreq2, function(x) -log(1/length(x)))
+SIdxNorm2=SIdx/SMax
+
+ColPal=c("#762a83","#1b7837",  "#af8dc3","#7fbf7b")
+
+## Do I need to bootstrap the conf Int?
+
+ReSampFracShannon=function(listIn){
+  Xin=sum(listIn$cloneCount)
+  Xnorm=listIn$cloneCount/Xin
+  XSamp=sample(listIn$aaSeqCDR3, Xin, replace = T, prob=Xnorm)
+  XSamp2=table(XSamp)/Xin
+  SIdx=-sum(XSamp2*log(XSamp2))
+  SIdx
+}
+
+NShannon=matrix(NA, nrow=1000, ncol=8)
+
+
+a1=proc.time()
+set.seed(10)
+for (i in 1:8){
+  NShannon[ ,i]=sapply(1:1000, function(x) ReSampFracShannon(BNew[[i]]))
+}
+a2=proc.time()-a1
+
+# Figure out the quantiles
+
+Qvals1=sapply(1:8, function(x) quantile(NShannon[ ,x], c(0.025, 0.975)))
+
+Qvals=t(Qvals1)/SMax
+
+plot(x=c(1,2), y=SIdxNorm2[1:2], type="o", ylim=c(0, 1), pch=19, ylab="Shannon's Equitability Index", col=ColPal[1], lwd=2)
+for (i in 2:4){
+  lines(x=c(1,2), y=SIdxNorm2[(2*i-1):(2*i)], type="o", col=ColPal[i], pch=19, lwd=2)
+}
+arrows(rep(c(1,2), 4), Qvals[,1 ], rep(c(1,2), 4), Qvals[,2 ], length=0.05, angle=90, code=3, col=rep(ColPal, each=2))
+legend("bottomright", c("8tumor", "9tumor", "8stroma", "9stroma"), col=ColPal, pch=19, lwd=1)
+```
+
+
+## Antigens recognized by IEDB
+
+The IEDB has lists of CDR3 peptides which are known to recognise specific antigens - these come from the literature and/or experimental testing. 
+
+
+```{r}
+Xnew=table( BFreqMelt$aaSeqCDR3, BFreqMelt$L1)
+mcases=rownames(Xnew)[which(rowSums(Xnew[ ,c(1:4)])>0)]
+C8=BFreqMelt[c(grep("8DCIS", BFreqMelt$L1), grep("8IDC", BFreqMelt$L1)),  ]
+mdup=unique(C8$aaSeqCDR3[which(duplicated(C8$aaSeqCDR3))])
+C8$dup=NA
+C8$dup[which(C8$aaSeqCDR3%in%mdup)]=C8$aaSeqCDR3[which(C8$aaSeqCDR3%in%mdup)]
+C8$dup=(factor(C8$dup, levels=levels(factor(C8$aaSeqCDR3))))
+C8=C8[order(C8$Frac), ]
+```
+
+For case 8, below are the CDR3 regions which match the database for Chain 1: These appear to be for allergen recognition.
+
+```{r}
+unfreq=C8$aaSeqCDR3[which(duplicated(C8$aaSeqCDR3))]
+
+m2=sapply(unfreq, function(x) grep(x, BCRbase$Chain.1.Full.Sequence))
+m3a=unlist(m2)
+
+
+BCRbase[unique(m3a), c(5:7)]
+```
+
+Some clonotypes recognise the following chain 2 sequences: including viral and staphylococcus:
+
+```{r}
+
+m2=sapply(unfreq, function(x) grep(x, BCRbase$Chain.2.Full.Sequence))
+m3b=unlist(m2)
+
+BCRbase[unique(m3b), c(5:7)]
+temp1=data.frame(peptide=c(names(m3a), names(m3b)), Ant=BCRbase$Antigen[c(m3a, m3b)], Org=BCRbase$Organism[c(m3a,m3b)])
+```
+
+These epitopes are shown below: 
+
+```{r}
+C8new=C8[which(C8$aaSeqCDR3%in%names(m3a)| C8$aaSeqCDR3%in%names(m3b)), ]
+C8new$antigen=paste(temp1$Ant, temp1$Org)[match(C8new$aaSeqCDR3, temp1$peptide)]
+
+ggplot(C8new, aes(x=L1, y=Frac, fill=antigen))+geom_bar(stat="identity",col="white", size=0.025)+coord_flip()+ylab("Proportion of common B clones with known epitopes")
+```
+
+
+We can perform a similar analysis for case 9 below. We find similar antigens: allergens, influenza as well as a precursor for ERBB2 protein.
+
+
+```{r}
+mcases=rownames(Xnew)[which(rowSums(Xnew[ ,c(5:8)])>0)]
+C9=BFreqMelt[c(grep("9DCIS", BFreqMelt$L1), grep("9IDC", BFreqMelt$L1)),  ]
+mdup=unique(C9$aaSeqCDR3[which(duplicated(C9$aaSeqCDR3))])
+C9$dup=NA
+C9$dup[which(C9$aaSeqCDR3%in%mdup)]=C9$aaSeqCDR3[which(C9$aaSeqCDR3%in%mdup)]
+C9$dup=(factor(C9$dup, levels=levels(factor(C9$aaSeqCDR3))))
+
+C9=C9[order(C9$Frac), ]
+```
+
+```{r}
+unfreq=unique(C9$aaSeqCDR3[which(duplicated(C9$aaSeqCDR3))])
+ttable=C9[C9$aaSeqCDR3%in%unfreq, ]
+
+m2=sapply(unfreq, function(x) grep(x, BCRbase$Chain.1.Full.Sequence))
+m3a=unlist(m2)
+BCRbase [m3a, c(5:7)]
+
+
+m2=sapply(unfreq, function(x) grep(x, BCRbase$Chain.2.Full.Sequence))
+m3b=unlist(m2)
+BCRbase[m3b, c(5:7)]
+
+temp1=data.frame(c(names(m3a), names(m3b)), Ant=BCRbase$Antigen[c(m3a, m3b)], Org=BCRbase$Organism[c(m3a,m3b)])
+```
+
+```{r}
+C9new=C9[which(C9$aaSeqCDR3%in%names(m3a)| C9$aaSeqCDR3%in%names(m3b)), ]
+C9new$antigen=paste(temp1$Ant, temp1$Org)[match(C9new$aaSeqCDR3, temp1$c.names.m3a...names.m3b..)]
+
+ggplot(C9new, aes(x=L1, y=Frac, fill=antigen))+geom_bar(stat="identity",col="white", size=0.025)+coord_flip()+ylab("Proportion of common BCR clonotypes with known binding antigen")
+```
+
+
+## Assessing the TCR
+
+Few TCR clonotypes were identified from the RNAseq data, possibly due to degradation. Below we show the frequency of different clonotypes and whether they are shared or not. Overall, because these populations are very small, we did not consider investigating the TCR repertoire in further detail 
+
+```{r}
+X1=unique(TFreqMelt$aaSeqCDR3[which(duplicated(TFreqMelt$aaSeqCDR3)==T)])
+Xnew=table( TFreqMelt$aaSeqCDR3, TFreqMelt$L1)
+mx=rowSums(sign(Xnew))
+TXnew=Xnew[which(mx>1), ]
+```
+
+One clonotype is shared in case 8 (red) the rest is unique. 
+
+```{r}
+mcases=rownames(Xnew)[which(rowSums(Xnew[ ,c(1:4)])>0)]
+C8=TFreqMelt[c(grep("8DCIS", TFreqMelt$L1), grep("8IDC", TFreqMelt$L1)),  ]
+mdup=unique(C8$aaSeqCDR3[which(duplicated(C8$aaSeqCDR3))])
+C8$dup=NA
+C8$dup[which(C8$aaSeqCDR3%in%mdup)]=C8$aaSeqCDR3[which(C8$aaSeqCDR3%in%mdup)]
+C8$dup=(factor(C8$dup, levels=levels(factor(C8$aaSeqCDR3))))
+ggplot(C8, aes(x=L1, y=Frac, fill=dup))+geom_bar(stat="identity",col="white", size=0.05)+coord_flip()+ylab("Proportion of TCR clonotypes")+theme(legend.position="bottom")
+```
+
+Similarly, case 9 has very few identified TCR regions: 
+
+```{r}
+#mcases=rownames(Xnew)[which(rowSums(Xnew[ ,c(5:8)])>0)]
+C8=TFreqMelt[c(grep("9DCIS", TFreqMelt$L1), grep("9IDC", TFreqMelt$L1)),  ]
+mdup=unique(C8$aaSeqCDR3[which(duplicated(C8$aaSeqCDR3))])
+C8$dup=NA
+C8$dup[which(C8$aaSeqCDR3%in%mdup)]=C8$aaSeqCDR3[which(C8$aaSeqCDR3%in%mdup)]
+C8$dup=(factor(C8$dup, levels=levels(factor(C8$aaSeqCDR3))))
+# C8=C8[order(C8$Frac), ]
+# C8$aaSeqCDR3=factor(C8$aaSeqCDR3)
+ggplot(C8, aes(x=L1, y=Frac,fill=seq))+geom_bar(stat="identity",size=0.05)+coord_flip()+ylab("Proportion of common T clones with known epitopes")+theme(legend.position="bottom")
+```
+

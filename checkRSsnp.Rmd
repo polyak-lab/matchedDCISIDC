@@ -1,0 +1,317 @@
+# Mutational Frequency in larger cohorts
+
+In this section we check the mutational frequency of common drivers associated with DCIS in a IDC cohort. This includes the common oncogenes TP53, PIK3CA, GATA3, PTEN but also includes commonly mutated genes including TTN and MUC16. 
+
+## Mutational frequency in TCGA
+
+```{r}
+B1$TumName=substr(B1$Tumor_Sample_Barcode, 1, 12)
+
+mSearch=c("AKT1","CDH1",  "GATA3", "KMT2C", "MAP3K1" ,"MUC16" , "PALB2", "PIK3CA", "PTEN" ,  "TP53" ,  "TTN" ) # add PTEN, KMT2C
+lx1=which(B1$Hugo_Symbol%in%mSearch)
+B2=B1[lx1, ]
+
+
+```
+
+
+Below is a summary of the mutational and neoantigen frequency of these genes in the TCGA cohort. The most common PIK3CA mutatiions are at amino acids 1047, 545, 542, 345, 726, 453 (more than 5 cases with mutations). 
+In TP53, these sites are 220 248 193 273 175. 
+
+```{r}
+## Loop over all genes
+
+AllGMat=matrix(NA, nrow=length(namList), ncol=12)
+
+colnames(AllGMat)=c("N.IDC.mutations",  "N.IDC.neoant",  "N.IDC.rsSNPs",  "N.IDC.uniqueSites", "N.IDC.sitesNeo", "N.IDC.sitesdbSNP", "PropNeoTotal", "PropSitesNeo", "PropdbSNP", "N.IDC.patmut","N.IDC.patNeo","N.IDC.pat.rsSNP")
+rownames(AllGMat)=namList
+
+CommSites=rep(NA, length(namList))
+
+B2new=data.frame()
+
+for (i in 1:length(allTCGANeoList2)){
+  allTCGANeoList2[[i]]$samp2=substr(allTCGANeoList2[[i]]$barcode, 1, 12)
+  
+  ## get the matrix with gene of interest
+  Bgata=B2[which(B2$Hugo_Symbol==namList[i]), c("Hugo_Symbol", "Chromosome", "Start_position","Protein_Change", "TumName", "dbSNP_RS", "i_tumor_vaf")]
+  Bgata=unique(Bgata)
+  AllGMat[i, 1]=nrow(Bgata) ## or length(unique(Bgata$TumName))
+  AllGMat[i, 10]=length(unique(Bgata$TumName))
+  ## redo this part
+  Bgata$Neoant=NA
+  p1=paste(Bgata$TumName, Bgata$Start_position)
+  g1=paste(allTCGANeoList2[[i]]$samp2, allTCGANeoList2[[i]]$position)
+  
+  Bgata$Neoant[which(p1%in%g1)]=1
+  AllGMat[i, 2]=sum(Bgata$Neoant, na.rm=T) 
+  AllGMat[i, 11]=sum(sign(table(Bgata$TumName, Bgata$Neoant)))
+  AllGMat[i, 3]=length(which(Bgata$dbSNP_RS!="")) 
+  Bgata$rsSNP2=ifelse(Bgata$dbSNP_RS=="", NA, 1)
+  AllGMat[i, 12]=sum(sign(table(Bgata$TumName, Bgata$rsSNP2)))
+  
+  lx1=regmatches(as.character(Bgata$Protein_Change), regexpr("[0-9]+", as.character(Bgata$Protein_Change)))
+  Bgata$Protein_Change2=NA
+  Bgata$Protein_Change2[which(Bgata$Protein_Change!="")]=lx1
+  
+  a1=table(factor(Bgata$Protein_Change2[which(Bgata$Neoant==1)], levels=unique(Bgata$Protein_Change2)))
+  a2=table(factor(Bgata$Protein_Change2, levels=unique(Bgata$Protein_Change2)))
+  a3=table(factor(Bgata$Protein_Change2[which(Bgata$dbSNP_RS!="")], levels=unique(Bgata$Protein_Change2)))
+  
+  AllGMat[i, 4]=length(a1)
+  
+  AllGMat[i, 5]=length(which(a1>0))
+  AllGMat[i, 6]=length(which(a3>0))
+  AllGMat[i, 7]=sum(a1)/sum(a2)
+  AllGMat[i, 8]=mean(a1/a2)
+  AllGMat[i, 9]=sum(a3)/sum(a2)
+  
+  P2=table(factor(substr(Bgata$Protein_Change, 3, 10)))
+  CommSites[i]=paste(names(which(P2>ceiling(as.numeric(AllGMat[i, 4])/20))),collapse =", " )
+  B2new=rbind(B2new, Bgata)
+}
+
+AllGMat
+```
+
+Visualising the frequency in the patient population below. Note that some patients may have multiple mutations in the same gene, hence, the total mutation count appears to be higher than the patient count. 
+
+In red are the proportion of patients with a mutation, green indicates the proportions of patients with mutation predicted to be a neoantigen. Blue indicates whether this is a hotspot or rsSNP site. PIK3CA for example sees that most of its mutations are neoantigens (approximately 90\%) and they almost all occur at annotated rsSNP sites.
+
+
+```{r}
+
+anew=melt(AllGMat[ ,c(10:12)]/length(unique(B1$TumName)))
+ggplot(anew, aes(x=Var1, y=value, fill=Var2))+geom_bar(stat="identity", position='dodge')+theme_bw()+xlab("gene")+ylab("frequency in patient population")
+```
+
+Note that TP53 and PIK3CA mutations below seem to be occurring at hostpots: whilst for the rest of the genes the number of unique sites at which mutations are found increases with patient frequency, TP53 and PIK3CA have fewer sites despite high frequency 
+
+```{r, fig.height=6, fig.width=6}
+plot(AllGMat[ ,10], AllGMat[ ,4], xlab="Patient frequency", ylab="No unique sites")
+text(AllGMat[ ,10], AllGMat[ ,4], rownames(AllGMat))
+```
+
+## Association with immune signatures
+
+Is there an association between samples which are predicted to be neoantigens and immune-function?
+
+Below, TCGA cases are split into "mutated" vs "wild type" for the gene genes of interest. A t.test is performed to determine whether there is a difference in the Thorsson signatures between the mutant compared to the wild type population. 
+
+Only associations with p <0.05 are shown. The heatmaps show the difference between the mean mutant signature and the mean wild type signature. (Red indicates higher in the mutant).
+
+In the below analysis, we focus only on ER+ cases due to the higher number of patients, and to avoid the confounding effect of association of immune scores with patient subtype.
+
+```{r}
+lx1=acast(B2new[ ,c("TumName", "Hugo_Symbol")],TumName~Hugo_Symbol)
+lx2=match(substr(rownames(lx1), 1, 12), ThorssonTab$`TCGA Participant Barcode`)
+
+## mutations?
+
+ThorssonTab$AKT1=0
+ThorssonTab$AKT1[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"AKT1"]))
+ThorssonTab$CDH1=0
+ThorssonTab$CDH1[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"CDH1"]))
+ThorssonTab$GATA3=0
+ThorssonTab$GATA3[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"GATA3"]))
+ThorssonTab$MUC16=0
+ThorssonTab$MUC16[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"MUC16"]))
+ThorssonTab$MAP3K1=0
+ThorssonTab$MAP3K1[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"MAP3K1"]))
+ThorssonTab$KMT2C=0
+ThorssonTab$KMT2C[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"KMT2C"]))
+ThorssonTab$PALB2=0
+ThorssonTab$PALB2[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"PALB2"]))
+ThorssonTab$PIK3CA=0
+ThorssonTab$PIK3CA[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"PIK3CA"]))
+ThorssonTab$PTEN=0
+ThorssonTab$PTEN[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"PTEN"]))
+ThorssonTab$TP53=0
+ThorssonTab$TP53[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"TP53"]))
+ThorssonTab$TTN=0
+ThorssonTab$TTN[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"TTN"]))
+
+## create a linear model here?
+
+## mutations?
+B2neo=B2new[which(B2new$Neoant==1), ]
+lx1=acast(B2neo[ ,c("TumName", "Hugo_Symbol")],TumName~Hugo_Symbol)
+lx2=match(substr(rownames(lx1), 1, 12), ThorssonTab$`TCGA Participant Barcode`)
+
+
+ThorssonTab$AKT1n=0
+ThorssonTab$AKT1n[(lx2)]=(sign(lx1[,"AKT1"]))
+ThorssonTab$CDH1n=0
+ThorssonTab$CDH1n[(lx2)]=(sign(lx1[ ,"CDH1"]))
+ThorssonTab$GATA3n=0
+ThorssonTab$GATA3n[(lx2)]=(sign(lx1[,"GATA3"]))
+ThorssonTab$MUC16n=0
+ThorssonTab$MUC16n[(lx2)]=(sign(lx1[ ,"MUC16"]))
+ThorssonTab$MAP3K1n=0
+ThorssonTab$MAP3K1n[(lx2)]=(sign(lx1[ ,"MAP3K1"]))
+ThorssonTab$KMT2Cn=0
+ThorssonTab$KMT2Cn[(lx2)]=(sign(lx1[ ,"KMT2C"]))
+ThorssonTab$PALB2n=0
+ThorssonTab$PALB2n[(lx2)]=(sign(lx1[ ,"PALB2"]))
+ThorssonTab$PIK3CAn=0
+ThorssonTab$PIK3CAn[(lx2)]=(sign(lx1[ ,"PIK3CA"]))
+ThorssonTab$PTENn=0
+ThorssonTab$PTENn[(lx2)]=(sign(lx1[ ,"PTEN"]))
+ThorssonTab$TP53n=0
+ThorssonTab$TP53n[(lx2)]=(sign(lx1[,"TP53"]))
+ThorssonTab$TTNn=0
+ThorssonTab$TTNn[(lx2)]=(sign(lx1[,"TTN"]))
+
+## mutations?
+B2rs=B2new[which(B2new$rsSNP2==1), ]
+lx1=acast(B2rs[ ,c("TumName", "Hugo_Symbol")],TumName~Hugo_Symbol)
+lx2=match(substr(rownames(lx1), 1, 12), ThorssonTab$`TCGA Participant Barcode`)
+
+ThorssonTab$CDH1rs=0
+ThorssonTab$CDH1rs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"CDH1"]))
+ThorssonTab$GATA3rs=0
+ThorssonTab$GATA3rs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"GATA3"]))
+ThorssonTab$MUC16rs=0
+ThorssonTab$MUC16rs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"MUC16"]))
+ThorssonTab$MAP3K1rs=0
+ThorssonTab$MAP3K1rs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"MAP3K1"]))
+ThorssonTab$KMT2Crs=0
+ThorssonTab$KMT2Crs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"KMT2C"]))
+ThorssonTab$PALB2rs=0
+ThorssonTab$PALB2rs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"PALB2"]))
+ThorssonTab$PIK3CArs=0
+ThorssonTab$PIK3CArs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"PIK3CA"]))
+ThorssonTab$PTENrs=0
+ThorssonTab$PTENrs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"PTEN"]))
+ThorssonTab$TP53rs=0
+ThorssonTab$TP53rs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"TP53"]))
+ThorssonTab$TTNrs=0
+ThorssonTab$TTNrs[na.omit(lx2)]=(sign(lx1[-which(is.na(lx2)) ,"TTN"]))
+
+
+TTab2=ThorssonTab[ ,c("Lymphocyte Infiltration Signature Score", mSearch)]
+colnames(TTab2)[1]="Immune"
+
+```
+
+
+
+```{r}
+## do a t.test or something for each case?
+
+ThorssonTab2=ThorssonTab[which(ThorssonTab$`TCGA Subtype`%in%c("BRCA.LumA", "BRCA.LumB")), ]
+
+DNames=c("Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
+         "Wound Healing", "TGF-beta Response")
+stIdx=mSearch
+Map2=matrix(NA, ncol=length(stIdx), nrow=length(DNames))
+Map1=Map2
+
+
+for (i in 1:length(DNames)){
+Map1[i, ]=sapply(1:length(stIdx), function(x) t.test(as.numeric(pull(ThorssonTab2, DNames[i]))~pull(ThorssonTab2, stIdx[x]))$p.value)
+Map2[i, ]=sapply(1:length(stIdx), function(x) diff(t.test(as.numeric(pull(ThorssonTab2, DNames[i]))~pull(ThorssonTab2, stIdx[x]))$estimate))
+}
+
+colnames(Map1)=stIdx
+rownames(Map1)=DNames
+Map2[which(Map1>0.05, arr.ind=T)]=NA
+Map1[which(Map1>0.05, arr.ind=T)]=NA
+
+colnames(Map2)=stIdx
+rownames(Map2)=DNames
+
+#heatmap.2(Map1, Rowv = NA, Colv = NA, col=blues9[9:1], trace="none")
+heatmap.2(Map2, Rowv = NA, Colv = NA, col=RdBu[11:1], trace="none", symbreaks = T, scale="none")
+```
+
+A similar analysis can be performed on "predicted neoantigen" vs not. Again, we focus on ER+ cases as these mutations are most common in this subtype and there is an increased immune signature in ER- cases.
+
+```{r}
+ThorssonTab2=ThorssonTab[which(ThorssonTab$`TCGA Subtype`%in%c("BRCA.LumA", "BRCA.LumB")), ]
+
+DNames=c("Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
+         "Wound Healing", "TGF-beta Response")
+
+stIdx=colnames(ThorssonTab2)[grep("[A-Z0-9]n$", colnames(ThorssonTab2))]
+Map2=matrix(NA, ncol=length(stIdx), nrow=length(DNames))
+Map1=Map2
+
+for (i in 1:length(DNames)){
+Map1[i,]=sapply(1:length(stIdx), function(x) t.test(as.numeric(pull(ThorssonTab2, DNames[i]))~pull(ThorssonTab2, stIdx[x]))$p.value)
+Map2[i, ]=sapply(1:length(stIdx), function(x) diff(t.test(as.numeric(pull(ThorssonTab2, DNames[i]))~pull(ThorssonTab2, stIdx[x]))$estimate))
+
+}
+
+Map1b=matrix(p.adjust(Map1, "BH"), nrow=5)
+
+colnames(Map1)=stIdx
+rownames(Map1)=DNames
+Map2[which(Map1>0.05, arr.ind=T)]=NA
+Map1[which(Map1>0.05, arr.ind=T)]=NA
+
+colnames(Map2)=stIdx
+rownames(Map2)=DNames
+
+#heatmap.2(Map1, Rowv = NA, Colv = NA, col=blues9[9:1], trace="none")
+heatmap.2(Map2, Rowv = NA, Colv = NA, col=RdBu[11:1], trace="none", symbreaks = T, scale="none", sepwidth=c(0.005, 0.005),  # width of the borders
+         colsep = c(0:10), rowsep = c(0: 6), sepcolor='black')
+
+
+OutputMap=cbind(AllGMat, t(Map2))
+
+```
+
+## DCIS set
+
+Perform a similar analysis to assess the frequency in DCIS. In this section, use the Abba cohort as well as the DCIS samples in the recurrence cohort. Overall, a similar pattern is observed where the most common mutations/neoantigens are in PIk3CA and in TP53.
+
+```{r}
+
+## Abba Set
+mmAbba=data.matrix(N2[match(mSearch, rownames(N2)), -1]) # this is ok
+rsSNPAbba=mmAbba
+rsSNPAbba[which(rsSNPAbba!=6, arr.ind=T)]=0
+
+AbbaSumm=AbbaNeoMutSum[match(mSearch, rownames(AbbaNeoMutSum)), ]
+
+AbbaSumMat=cbind(rowSums(sign(mmAbba)),
+                 sapply(1:nrow(AbbaSumm), function(x) length(which(AbbaSumm[x, ]>2))),  rowSums(sign(rsSNPAbba)))
+AbbaSumMat[which(is.na(AbbaSumMat), arr.ind=T)]=0
+
+colnames(AbbaSumMat)=c("N.DCIS.Mut", "N.DCIS.Neo", "N.DCIS.rsSNP" )
+
+##Recurrence set
+xrowN=sapply( strsplit(rownames(MutCNVTabrecur), " ) "), function(x) x[length(x)])
+ReMut=MutCNVTabrecur[ match(mSearch, xrowN),seq(1, 12, by=2)]
+ReMut[which(ReMut==2, arr.ind=T)]=0
+ReMut[which(ReMut==(-2), arr.ind=T)]=0
+
+NeoRec2=recNeo[match(mSearch, rownames(recNeo)), grep("DCIS", colnames(recNeo))]
+
+RSumMat=cbind(rowSums(abs(ReMut), na.rm=T),rowSums(sign(abs(NeoRec2)), na.rm=T),
+              sapply(1:nrow(ReMut), function(x) length(which(ReMut[x, ]==1))))
+
+
+NMat=AbbaSumMat+RSumMat
+
+rownames(NMat)=mSearch
+
+## write this table to file, and write down the key mutation sites?
+#write.csv(AbbaSumMat, file="rslt/Routput/DCIS_mutation_frequency.csv")
+
+
+colnames(NMat)=c("nPat", "nRSNP", "nNeo")
+NMat=t(t(NMat)/c(29+6, 29+6, 29+6))
+
+amelt=melt(NMat)
+ggplot(amelt, aes(x=Var1, y=value, fill=Var2))+geom_bar(stat="identity", position='dodge')+theme_bw()
+
+```
+
+write to file as Table S5
+
+```{r}
+OutputMap=cbind(OutputMap, AbbaSumMat)
+write.csv(OutputMap, file="rslt/TableS5_DCIS_mutation_frequency.csv")
+```

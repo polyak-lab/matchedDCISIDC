@@ -1,0 +1,233 @@
+# Mutations
+
+## All coding mutations 
+
+Below is a plot of all coding mutations, color coded according to type of mutation. If a mutation is observed at exactly the same site, overlap in the plot is observed. 
+
+In the recurrence cohort, very few mutations appear to be shared. Many 5DCIS mutations were also found in 5IDC for example, and a small proportion of mutations in cases 2, 8, and 9 were preserved. Case 1 and Case 3 had virtually no overlapping mutations.
+
+```{r}
+# shared DCIS mutations
+AllGenes=lapply(Mutall2, function(x) (x[x$Variant_Classification%in%SeqOnt, c("Hugo_Symbol", "Variant_Classification","dbSNP_RS", "Protein_Change")]))
+
+for (i in 1:12){
+  AllGenes[[i]]$Variant_Classification=as.character(AllGenes[[i]]$Variant_Classification)
+  AllGenes[[i]]$Variant_Classification <-ifelse(AllGenes[[i]]$dbSNP_RS!="", "rsSNP", AllGenes[[i]]$Variant_Classification)
+}
+
+AllGenesUn=unique(melt(AllGenes)$Hugo_Symbol)
+Ta=melt(AllGenes)
+Ta$ID=paste(Ta$Hugo_Symbol, Ta$Protein_Change)
+lx1=which(duplicated(Ta[ ,c("ID", "L1")]))
+if (length(lx1)>0){
+Ta2=Ta[-which(duplicated(Ta[ ,c("ID", "L1")])), ]
+} else {
+  Ta2=Ta
+}
+N2=dcast(Ta2[ ,c("ID", "L1", "Variant_Classification")], ID~L1, value.var="Variant_Classification") #, value.var="Variant_Classification")
+N2[which(N2==SeqOnt[3], arr.ind=T)]=1
+N2[which(N2==SeqOnt[4], arr.ind=T)]=2
+N2[which(N2==SeqOnt[1], arr.ind=T)]=3
+N2[which(N2==SeqOnt[2], arr.ind=T)]=4
+N2[which(N2==SeqOnt[5], arr.ind=T)]=5
+N2[which(N2=="rsSNP", arr.ind=T)]=6
+
+N2=N2[order(N2[ ,2], N2[,3], N2[,4], N2[,5],N2[ ,6], N2[,7], N2[,8], N2[,9], N2[ ,10], N2[,11], N2[ ,12],N2[ ,13], decreasing = T), ]
+image(data.matrix(N2[ ,-1]), col=brewer.pal(6,"Spectral"), xaxt="none", yaxt="none")
+axis(2, at=seq(0, 1, length=12), colnames(N2)[-1], las=2)
+legend("bottomright", c("mis", "non", "fsd", "fsi","splice", "rsSNP"), col=brewer.pal(6,"Spectral"), pch=20)
+```
+
+Across all coding mutations: Most are missense (usually 50% upwards),
+
+```{r, eval=F}
+allOnto=unique(unlist(sapply(AllGenes, function(x) x$Variant_Classification)))
+AllGSumm=sapply(AllGenes, function(x) summary(factor(x$Variant_Classification, levels=allOnto)))
+
+AllGSumm2=t(AllGSumm)/(sum(AllGSumm))
+
+AllGSumm2
+
+barplot(t(AllGSumm2), beside=T, col=brewer.pal(6, "RdYlBu"))
+legend("topleft", colnames(AllGSumm2), col=brewer.pal(6, "RdYlBu"), pch=20)
+```
+
+
+## Summary of oncogenic mutations
+
+Below is an overlap of all coding mutations and CNVs found in common cancer-related genes.
+
+Orange: CNV gain
+Blue: CNV loss
+Yellow: coding mutation
+Green: a rsSNP site
+
+Note that there are some mutations conserved in DCIS to IDC: for example, in Case 8 CDH1, TP53 are conserved. In Case 9, we see PIK3CA and GATA3 albeit at different sites. Case 5 also shares a coding TP53 mutation.
+
+
+```{r}
+## annotate Mutall2 if the gene is an oncogene
+
+for (i in 1:length(Mutall2)){
+  Mutall2[[i]]$Oncogene=ifelse(Mutall2[[i]]$Hugo_Symbol%in%OncoList$Gene.Symbol, 1, 0)
+}
+
+# refine the search to oncogenes
+msearch=which(AllGenesUn%in%OncoList$Gene.Symbol)
+msearch1=lapply(AllGenes, function(x) x[x$Hugo_Symbol%in%OncoList$Gene.Symbol, ])
+msearchX=melt(msearch1)
+colnames(msearchX)=c("genes", "VariantType",  "dbSNP_RS", "protein", "L1")
+msearchX$mut=ifelse(msearchX$dbSNP_RS!="", paste("(", msearchX$protein, ")", msearchX$genes), as.character(msearchX$genes))
+msearchX$value=ifelse(msearchX$VariantType=="rsSNP",  1, -1)
+Dnew2=DnewOnc[which( DnewOnc$call!="0"), ] ## need to change this value!!
+Dnew2=Dnew2[which(Dnew2$genes%in% c(as.character(msearchX$genes),breastGeneList )), ]
+Dnew2$value=ifelse(Dnew2$call=="+", 2, -2)
+Dnew2$L1=Dnew2$variable
+
+msearchN=rbind(msearchX[ ,c("genes","L1","value")], Dnew2[ ,c("genes","L1","value" )])
+lx1=which(duplicated(msearchN[ ,1:2]))
+FNew3=acast(msearchN[-lx1, ], genes~L1)
+Lx1=(abs(FNew3))
+FNew3=FNew3[order(Lx1[ ,1], Lx1[ ,2], Lx1[ ,3], Lx1[ ,4], Lx1[ ,5],Lx1[ ,6],
+                  Lx1[ ,7], Lx1[ ,8], Lx1[ ,9], Lx1[ ,10], Lx1[ ,11]),  ]
+
+OldRN=rownames(FNew3)
+lx1=msearchX$mut[match(rownames(FNew3), msearchX$genes)]
+
+rownames(FNew3)[-which(is.na(lx1))]=na.omit(lx1)
+MutCNVTabrecur=FNew3
+image(FNew3, col=c("#9ecae1", "#fed976","white", "#addd8e", "#fb6a4a"), xaxt="n", yaxt="n")
+
+axis(1, at=seq(0, 1, length=nrow(FNew3)), rownames(FNew3), las=2, cex=0.6,  cex.axis=0.7)
+axis(2, at=seq(0, 1, length=12), paste(rep(c(1:3, 5, 8:9), each=2), c("DCIS", "IDC")), las=2)
+
+```
+
+The expression profile corresponding to the above plot. Note that expression values are z-scaled, so ERBB2 is high in case 9 relative to the other cases, as is GATA3. PTEN which is mutated in Case 2 has lower expression compared to the other samples?
+
+```{r}
+MTable=normalizedTableVSD[(match(OldRN, rownames(normalizedTableVSD))), na.omit(match(colnames(FNew3), colnames(normalizedTableVSD)))]
+MTable2=scale(t(MTable))
+heatmap.2(MTable2[-(grep("str", colnames(normalizedTableVSD))) ,], col=RdBu[11:1], trace="none", Colv = NA, Rowv = NA)
+```
+
+## Abba and Lesurf sets
+
+Below is a similar plot for a combined Lesurf and Abba cohort, highlighting genes which are gained and lost and also have mutations. Erbb2, Myc are commonly gained for example.
+
+Orange: CNV gain
+Blue: CNV loss
+Yellow: coding mutation
+Green: a rsSNP site
+
+```{r, fig.height=8}
+AAllGenes=lapply(AMutall, function(x) (x[x$Variant_Classification%in%SeqOnt, c("Hugo_Symbol", "Variant_Classification","dbSNP_RS", "Protein_Change")]))
+
+for (i in 1:length(AMutall)){
+  AAllGenes[[i]]$Variant_Classification=as.character(AAllGenes[[i]]$Variant_Classification)
+  AAllGenes[[i]]$dbSNP_RS=ifelse(is.na(AAllGenes[[i]]$dbSNP_RS)==T, "", as.character(AAllGenes[[i]]$dbSNP_RS))
+  AAllGenes[[i]]$Variant_Classification <-ifelse(AAllGenes[[i]]$dbSNP_RS!="", "rsSNP", AAllGenes[[i]]$Variant_Classification)
+}
+
+AAllGenesUn=unique(melt(AAllGenes)$Hugo_Symbol)
+Ta=melt(AAllGenes)
+Ta2=Ta[-which(duplicated(Ta[ ,c("Hugo_Symbol", "L1")])), ]
+Ta2$Hugo_Symbol=factor(Ta2$Hugo_Symbol)
+
+N2=dcast(Ta2, Hugo_Symbol~L1, value.var="Variant_Classification") #, value.var="Variant_Classification")
+N2[which(N2=="Missense_Mutation", arr.ind=T)]=1
+N2[which(N2=="Nonsense_Mutation", arr.ind=T)]=2
+N2[which(N2=="Frame_Shift_Del", arr.ind=T)]=3
+N2[which(N2=="Frame_Shift_Ins", arr.ind=T)]=4
+N2[which(N2=="Splice_Site", arr.ind=T)]=5
+N2[which(N2=="rsSNP", arr.ind=T)]=6
+rownames(N2)=N2[ ,1]
+
+N2[which(is.na(N2)==T, arr.ind=T)]=0
+
+
+for (i in 1:length(AMutall)){
+  AMutall[[i]]$Oncogene=ifelse(AMutall[[i]]$Hugo_Symbol%in%OncoList$Gene.Symbol, 1, 0)
+}
+
+# refine the search to oncogenes
+msearch=which(AAllGenesUn%in%OncoList$Gene.Symbol)
+msearch1=lapply(AAllGenes, function(x) x[x$Hugo_Symbol%in%OncoList$Gene.Symbol, ])
+msearchX=melt(msearch1)
+colnames(msearchX)=c("Gene", "VariantType",  "dbSNP_RS", "protein", "variable")
+msearchX$mut=ifelse(msearchX$dbSNP_RS!="", paste("(", msearchX$protein, ")", msearchX$Gene), as.character(msearchX$Gene))
+msearchX$call=ifelse(msearchX$VariantType=="rsSNP", -1, -2)
+## extract the amp/loss information
+# may need to change threshold here
+ADnew2=AbbaDnewOnc[which(AbbaDnewOnc$call!="0"), ] ## need to change this value!!
+ADnew2=ADnew2[which(ADnew2$Gene%in% c(as.character(msearchX$Gene),breastGeneList )), ]
+ADnew2$call=ifelse(ADnew2$call=="+", 2, -3)
+ADnew2$L1=ADnew2$pat
+
+## also include the Lesurf CNV set
+LBreastmeltB=LBreastmelt[which(LBreastmelt$Gene%in% c(as.character(msearchX$Gene),breastGeneList)),]
+
+msearchN=rbind(msearchX[ ,c("Gene","variable", "call")], ADnew2[ ,c("Gene","variable","call" )], LBreastmeltB[ ,c("Gene", "variable", "call")])
+lx1=which(duplicated(msearchN[ ,1:2]))
+FNew3=acast(msearchN[-lx1, ], Gene~variable)
+
+FNew4=melt(FNew3)
+FNew4$subtype=AbbaClin$`PAM50 call`[match(FNew4$Var2, AbbaClin$SampleID)]
+
+lidx=c(grep("EuCan", FNew4$Var2), grep("FW",  FNew4$Var2))
+
+FNew4$subtype[lidx]=dcis_annot$PAM50[match(FNew4$Var2[lidx], rownames(dcis_annot))]
+FNew4$chrom=as.numeric(as.character(seqnames(tx37)[match(FNew4$Var1, tx37$HUGO)]))
+FNew4$Loc=start(ranges(tx37))[match(FNew4$Var1, tx37$HUGO)]
+
+FNew4=FNew4[order(FNew4$Loc), ]
+FNew4$Var1=factor(FNew4$Var1, levels=unique(FNew4$Var1))
+
+p=ggplot(FNew4, aes(x=Var1, y=Var2, fill=factor(value)))+geom_tile()+facet_grid(subtype~chrom,scales="free", space="free_x")+
+  scale_fill_manual(values = c("#9ecae1", "#fed976", "#addd8e",  "#fb6a4a"), na.value="white")+theme(axis.text.x=element_text(angle=90, vjust=.8, hjust=1.01))+ggtitle(label="Abba set")
+
+gp <- ggplotGrob(p)
+# get gtable columns corresponding to the facets (5 & 9, in this case)
+facet.rows <- gp$layout$t[grepl("panel", gp$layout$name)]
+
+# get the number of unique x-axis values per facet (1 & 3, in this case)
+x.var <- sapply(ggplot_build(p)$layout$panel_scales_y,
+                function(l) length(l$range$range))
+
+# change the relative widths of the facet columns based on
+# how many unique x-axis values are in each facet
+gp$heights[facet.rows] <- gp$heights[facet.rows] * x.var
+
+# plot result
+grid::grid.draw(gp)
+
+
+```
+
+Below we calculate exactly the number of cases which have an amplification ofor loss for key oncogenes of interest:
+
+<span style="color:red"> calculate proportion for the Lesurf cohort too </span>
+
+For HER2, `r length(which(ADnew2[(ADnew2$Gene=="ERBB2"), "call"]=="2"))` samples in the Abba cohort have gains.
+`r length(which(LBreastmeltB[LBreastmeltB$Gene=="ERBB2", "call"]=="2"))` samples in the Lesurf cohort have gains.
+
+PIK3CA: `r length(which(msearchX$call[msearchX$Gene=="PIK3CA"]==(-1)))` samples in the Abba coort have mutations. Note that one sample (T14) has two different PIK3CA mutations.
+
+TP53: `r length(which(msearchX$call[msearchX$Gene=="TP53"]<0))` samples in the Abba cohort have mutations
+
+GATA3: `r length(which(msearchX$call[msearchX$Gene=="GATA3"]<0))` samples in the Abba cohort have mutations
+
+```{r}
+print('Abba cases HER2')
+table(ADnew2[(ADnew2$Gene=="ERBB2"), "call"])
+print('Abba cases PIk3CA')
+table(msearchX$call[msearchX$Gene=="PIK3CA"], msearchX$variable[msearchX$Gene=="PIK3CA"])
+print('Abba cases TP53')
+table(msearchX$call[msearchX$Gene=="TP53"], msearchX$variable[msearchX$Gene=="TP53"])
+print('Abba cases GATA3')
+table(msearchX$call[msearchX$Gene=="GATA3"], msearchX$variable[msearchX$Gene=="GATA3"])
+
+
+print('Lesurf set ERBB2 calls')
+table(LBreastmeltB[which(LBreastmeltB$Gene=="ERBB2"), "call"])
+```

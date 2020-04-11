@@ -1,0 +1,545 @@
+# Inferring genomic regions associated with immune function
+
+We have so far shown that MHC-I copy number loss is associated with expression, and have previously pointed to amplification of the CCL locus on chr 17 and amplification of 9q PDL1 locus as possible contributors to immune suppression. In this section, we will investigate 
+
+* are there other regions in the genome which are immune hotspots? 
+* are any of these immune hotspots commonly gained or lost in DCIS?
+* do gains and losses in these regions associate with immune signatures? (And thus, could have an immune-modulatory effect?)
+
+
+## Identify immune hotspots
+
+The steps taken into this task include: 
+- Discretise genome into ~600 bins of 5MB
+- Look up all immune genes from ImmPort and InnateDB and map them onto the genome
+- For each 5MB bin, how many genes are present?
+- How many genes in this bin are immune related
+- Do a hypergeometric test to determine whether there are more than expected 
+- FDR adjustment of Pvalues and take p less than 0.1
+
+This exercise may omit some regions due segmentation boundaries, and complete randomisation of genes within the genome is a non-trivial task. Although there are regions which may be missed, this task is a proof-of-principle to determine whether the gain or loss of a region could have an immune consequence.
+
+```{r}
+## make windows in the genome
+ImmSpec2$LvlAdd=as.numeric(chrInfo$sumdist[as.numeric(match(seqnames(ImmSpec2), chrInfo$Chromosome))])
+BigVal=max(chrInfo$sumdist)
+windsize=5000000
+ExpectedNoWind=round(chrInfo$bp/windsize)
+cIdx2=sapply(1:23, function(x) seq(chrInfo$sumdist[x], chrInfo$cumdist2[x], length=ExpectedNoWind[x]+1))
+cIdx2N=lapply(1:length(cIdx2), function(x) cIdx2[[x]]-chrInfo$sumdist[x])
+cIdx2M=sapply(cIdx2N, function(x) cbind(x[1:(length(x)-1)], x[2:(length(x))]))
+cIdxL=sapply(cIdx2M, nrow)
+temp=do.call(rbind,cIdx2M)
+WindowReg=GRanges(seqnames = rep(chrInfo$Chromosome[1:23], times=cIdxL), ranges=IRanges(start= temp[,1], end=temp[,2]))
+
+## Allocate genes into each window:
+## find all genes which occur in each site: this is correct
+#seqlevelsStyle(tx37)="NCBI"
+winannot=GenomicRanges::findOverlaps(tx37,WindowReg)
+WindowReg$NoGenes=as.numeric(table(factor(subjectHits(winannot), c(1:length(WindowReg)))))
+Genes1=sapply(1:length(WindowReg), function(x) paste(tx37$HUGO[queryHits(winannot)[which(subjectHits(winannot)==x)]], sep=", ", collapse=", "))
+WindowReg$Genes=Genes1
+
+## To WindowReg, add the GeneNames directly
+immannot=GenomicRanges::findOverlaps(ImmSpec2,WindowReg)
+WindowReg$NoImmuneGenes=as.numeric(table(factor(subjectHits(immannot), c(1:length(WindowReg)))))
+Genes2=sapply(1:length(WindowReg), function(x) paste(ImmSpec2$HUGO[queryHits(immannot)[which(subjectHits(immannot)==x)]], sep=", ", collapse=", "))
+ImmGeneList=sapply(1:length(WindowReg), function(x) as.character(ImmSpec2$HUGO[queryHits(immannot)[which(subjectHits(immannot)==x)]]))
+WindowReg$ImmGenes=Genes2
+
+## How to define Tab
+cIdx=seq(0, BigVal, by=windsize)
+cIdx3=unique(unlist(cIdx2))
+
+WindowReg$Loc=cIdx3[-1]
+
+
+## match the numbers together: what is the probability of getting x or more genes enriched in a site
+PvalEst1=sapply(1:length(WindowReg), function(x) 1-phyper(WindowReg$NoImmuneGenes[x], length(ImmSpec2), length(tx37)-length(ImmSpec2), WindowReg$NoGenes[x]))
+
+WindowReg$Pval=PvalEst1
+# mark NA the regions with no genes
+
+WindowReg$Pval[which(WindowReg$NoGenes==0)]=NA
+## annotate the genes and gene names
+
+
+SimWrap=function(str){
+  library(RecordLinkage)
+  SimID=matrix(NA, nrow=length(str), ncol=length(str))
+  for (i in 1:(length(str)-1)){
+    for (j in i:length(str)){
+      SimID[i,j]=levenshteinSim(str[i], str[j])
+    }
+  }
+  diag(SimID)=NA
+  EnrichVals=which(SimID>0.6, arr.ind = T)
+  ListSamps=unique(str[EnrichVals])
+  Others=setdiff(str, ListSamps)
+  if (length(ListSamps)>1){
+  PatN=na.omit(unique(sapply(1:length(ListSamps), function(x) Basemtach(ListSamps[c(x, setdiff(1:length(ListSamps), x))]))))
+  } else{
+    PatN=NULL
+  }
+ # attributes(PatN)$na.action <- NULL
+  ret=list(genes=ListSamps, rep.pat=PatN, other=Others)
+  ret
+}
+
+Basemtach=function(str){
+  MIdx=sapply(2:6, function(x) length(grep(substr(str[1], 1, x), str)))
+  Diff=diff(MIdx)
+  mx=which.min(Diff)
+  if (sum(Diff)==0 & sum(MIdx)>5){
+    mx=5
+  }
+  if (sum(Diff)==0 & sum(MIdx)==5){
+    mx=NA
+  }
+  substr(str[1], 1, (mx+1))
+}
+
+emptyList=sapply(ImmGeneList, length)
+
+eidx=which(emptyList>0)
+stemp=lapply(ImmGeneList[eidx], function(x) SimWrap(x))
+
+WindowReg$GeneFam=""
+WindowReg$GeneFam[eidx]=sapply(stemp, function(x) paste(sort(x[[1]]), collapse=", "))
+WindowReg$GeneFamPre[eidx]=sapply(stemp, function(x) paste(sort(x[[2]]), collapse=", "))
+WindowReg$GeneFamPost[eidx]=sapply(stemp, function(x) paste(sort(x[[3]]), collapse=", "))
+WindowReg$padj=p.adjust(WindowReg$Pval, method="fdr")
+WindowReg$Label=paste(WindowReg$GeneFamPre, WindowReg$GeneFamPost)
+
+## annotate WindowReg with chromosomal location?
+seqlevelsStyle(CytoGR)="NCBI"
+olaps2=GenomicRanges::findOverlaps(WindowReg, CytoGR)
+cytoRes=sapply(1:length(WindowReg), function(x) paste(unique(CytoGR$Desc[subjectHits(olaps2)[which(queryHits(olaps2)==x)]]), sep="-", collapse="-"))
+WindowReg$cytoband=cytoRes
+
+Tab=mcols(WindowReg)
+Tab$Chr=seqnames(WindowReg)
+Tab$start=start(ranges(WindowReg))
+Tab$end=end(ranges(WindowReg))
+
+## write to file the region information
+#write.csv(Tab, file=sprintf("rslt/Routput/Tab_immune_genome_5M_%s.csv", Sys.Date()))
+```
+
+
+```{r, fig.height=7}
+par(mfrow=c(2,2))
+hist(WindowReg$Pval, main="raw p-values", xlabel="p values")
+hist(WindowReg$padj, main="adj p-values", xlabel="adjusted p value")
+
+Nsig=matrix(c(length(which(WindowReg$Pval<0.05)), length(which(WindowReg$Pval<0.1)),length(which(WindowReg$Pval<0.2)), length(which(WindowReg$padj<0.05)), length(which(WindowReg$padj<0.1)), length(which(WindowReg$padj<0.2))), ncol=2)
+
+barplot(Nsig, beside=T, xlab="No significant genes", names.arg=c("raw", "adjusted"), ylabel="number of sig. regions")
+legend("topright", c("p<0.05", "p<0.1", "p<0.2"), col=c("grey15", "grey", "grey80"), pch=15)
+```
+
+There are `r Nsig[,2 ]` significant regions at alpha = 0.05, 0.1 and 0.2 after p value correction. We will further investigate the regions selected using a p value of 0.1. 
+
+## Relating these regions to gain and losses in tumors 
+
+Below is a genome-wide view of the gains and losses observed in the recurrence and Abba sets. Annotated are the regions which have been considered to be "immune" hotspots from the previous analysis.
+
+In dark red/blue: are the 33 hotspot regions identified
+In light blue/red: are the regions lost/gained in our cohort
+In medium red/blue: are the samples in the Abba cohort.
+
+Note that the plot considers the recurrence and Abba cohorts separately so the bars are additive, and if all samples have a gain, a value of 2 will be shown.
+
+
+```{r}
+## Recurrence cohort
+
+Pthresh=0.1
+AllDCNGR=GRanges(seqnames = AllDCN$chrom, ranges = IRanges(start=AllDCN$start.pos, end=AllDCN$end.pos), ampDel=ifelse(AllDCN$call=="+", 1, ifelse(AllDCN$call=="-", -1, 0 ) ), sample=AllDCN$sampleID, case=substr(AllDCN$sampleID, 1, 1), type=substr(AllDCN$sampleID, 2, 5))
+GainVals=findOverlaps(AllDCNGR[AllDCNGR$ampDel==1&AllDCNGR$type=="DCIS"],WindowReg)
+# need to check these values are unique
+tx1=AllDCNGR$sample[AllDCNGR$ampDel==1&AllDCNGR$type=="DCIS"]
+AmpS=sapply(1:length(WindowReg), function(x) paste(unique(tx1[queryHits(GainVals)[which(subjectHits(GainVals)==x)]]), sep=", ", collapse=", "))
+AmpV=sapply(1:length(WindowReg), function(x) length(unique(tx1[queryHits(GainVals)[which(subjectHits(GainVals)==x)]])))
+DelVals=findOverlaps(AllDCNGR[AllDCNGR$ampDel==(-1)&AllDCNGR$type=="DCIS"], WindowReg)
+tx1=AllDCNGR$sample[AllDCNGR$ampDel==(-1) & AllDCNGR$type=="DCIS"]
+DelS=sapply(1:length(WindowReg), function(x) paste(unique(tx1[queryHits(DelVals)[which(subjectHits(DelVals)==x)]]), sep=", ", collapse=", "))
+DelV=sapply(1:length(WindowReg), function(x) length(unique(tx1[queryHits(DelVals)[which(subjectHits(DelVals)==x)]])))
+WindowReg$NGain=AmpV
+
+WindowReg$NLoss=DelV
+
+## annotate which region gains are preserved in IDC
+GainVals=findOverlaps(AllDCNGR[AllDCNGR$ampDel==1&AllDCNGR$type=="IDC"],WindowReg)
+# need to check these values are unique
+tx1=AllDCNGR$sample[AllDCNGR$ampDel==1&AllDCNGR$type=="IDC"]
+AmpS2=sapply(1:length(WindowReg), function(x) paste(unique(tx1[queryHits(GainVals)[which(subjectHits(GainVals)==x)]]), sep=", ", collapse=", "))
+DelVals=findOverlaps(AllDCNGR[AllDCNGR$ampDel==(-1)&AllDCNGR$type=="IDC"], WindowReg)
+tx1=AllDCNGR$sample[AllDCNGR$ampDel==(-1) & AllDCNGR$type=="IDC"]
+DelS2=sapply(1:length(WindowReg), function(x) paste(unique(tx1[queryHits(DelVals)[which(subjectHits(DelVals)==x)]]), sep=", ", collapse=", "))
+
+
+WindowReg$GainRecCohort=paste(AmpS, AmpS2,sep=" ")
+WindowReg$LossRecCohort=paste(DelS, DelS2, sep=" ")
+
+## Add Abba data
+# CNV version
+#cutoff=0.3
+AllDCNAbbaGR=GRanges(seqnames = AllDCNAbba$chrom, ranges = IRanges(start=AllDCNAbba$start.pos, end=AllDCNAbba$end.pos), ampDel=ifelse(AllDCNAbba$call=="+", 1, ifelse(AllDCNAbba$call=="-", -1, 0 ) ), sample=AllDCNAbba$sampleID, case=substr(AllDCNAbba$sampleID, 1, 1), type=substr(AllDCNAbba$sampleID, 2, 5), mean_val=AllDCNAbba$mean2)
+
+GainVals=findOverlaps(AllDCNAbbaGR[AllDCNAbbaGR$ampDel==1],WindowReg)
+# need to check these values are unique
+
+tx1=AllDCNAbbaGR$sample[AllDCNAbbaGR$ampDel==1]
+AmpS=sapply(1:length(WindowReg), function(x) paste(unique(tx1[queryHits(GainVals)[which(subjectHits(GainVals)==x)]]), sep=", ", collapse=", "))
+AmpV=sapply(1:length(WindowReg), function(x) length(unique(tx1[queryHits(GainVals)[which(subjectHits(GainVals)==x)]])))
+
+
+DelVals=findOverlaps(AllDCNAbbaGR[AllDCNAbbaGR$ampDel==(-1)], WindowReg)
+
+tx1=AllDCNAbbaGR$sample[AllDCNAbbaGR$ampDel==(-1)]
+DelS=sapply(1:length(WindowReg), function(x) paste(unique(tx1[queryHits(DelVals)[which(subjectHits(DelVals)==x)]]), sep=", ", collapse=", "))
+DelV=sapply(1:length(WindowReg), function(x) length(unique(tx1[queryHits(DelVals)[which(subjectHits(DelVals)==x)]])))
+
+
+WindowReg$GainAbba=as.vector(AmpV)
+WindowReg$LossAbba=as.vector(DelV)
+WindowReg$GainAbbaID=AmpS
+WindowReg$LossAbbaID=DelS
+```
+
+
+
+```{r}
+midx=which(WindowReg$ImmGenes=="" | WindowReg$padj>Pthresh)
+
+WindowReg$GainProp=WindowReg$GainAbba/29+WindowReg$NGain/6 #+WindowReg$GainLesurf/42
+WindowReg$LossProp=-WindowReg$LossAbba/29-WindowReg$NLoss/6 #+WindowReg$DelLesurf/42
+WindowReg$GainProp[midx]=0
+WindowReg$LossProp[midx]=0
+
+## try a ggplot? Need to add the chromosomal position
+
+WindowRegmelt=melt(WindowReg) #col
+colnames(WindowRegmelt)[6:ncol(WindowRegmelt)]=colnames(mcols(WindowReg))
+WindowRegmelt$x=c(1:nrow(WindowRegmelt))
+WindowRegmelt$y1=WindowRegmelt$GainAbba/29+WindowRegmelt$NGain/6
+WindowRegmelt$y2=WindowRegmelt$NGain/6
+WindowRegmelt$y3=-WindowRegmelt$NLoss/6
+WindowRegmelt$y4=-WindowRegmelt$LossAbba/29-WindowRegmelt$NLoss/6
+WindowTot=WindowRegmelt[ ,c("x", "ImmGenes", "Label", "padj", "y1", "y2", "y3", "y4")]
+matidx=match(c(seq(1:22), "X"),WindowRegmelt$value)
+# hack to wrap text every 50 characters
+
+WindowTot$AllImm=sapply(WindowTot$ImmGenes, function(x) paste(stri_wrap(x, 30), collapse="\n "))
+WindowTot$AllImm[which(WindowTot$padj>Pthresh)]=""
+
+WindowTot$Label=sapply(WindowTot$Label, function(x) paste(stri_wrap(x, 20), collapse="\n "))
+WindowTot$Label[which(WindowTot$padj>Pthresh)]=""
+WindowTot$Label[which(WindowTot$Label=="NA NA")]=""
+######
+# comment this out later
+######
+#WindowTot$AllImm[which(rowSums(WindowTot[ ,4:7])==0)]=NA
+
+WindowTot2=melt(WindowTot, measure.vars=c("y1", "y2", "y3", "y4"))
+
+linea<-subset(WindowTot2,variable=="y1" & AllImm!="")
+linea$variable="y5"
+lineb<-subset(WindowTot2,variable=="y4" & AllImm!="")
+lineb$variable="y6"
+
+WindowTot2$Label[(nrow(WindowTot)+1):nrow(WindowTot2)]=NA
+
+positive_rr1 <- subset(WindowTot2,variable=="y1" )
+negative_rr1 <- subset(WindowTot2,variable=="y2")
+positive_rr2 <- subset(WindowTot2,variable=="y3")
+negative_rr2 <- subset(WindowTot2,variable=="y4")
+levels(WindowTot2$variable)=c("y1", "y2", "y3", "y4", "y5", "y6")
+
+
+mx1=which(positive_rr1$value<0.2 & negative_rr2$value<0)
+WindowTot2$Label[(nrow(positive_rr1)*3+mx1)]=WindowTot2$Label[mx1]
+WindowTot2$Label[mx1]=NA
+
+ggplot(WindowTot2, aes(x=x, y=value, fill=variable, label=Label))+geom_vline(xintercept=matidx-0.5, col="grey")+geom_bar(data=positive_rr1,stat="identity", position="identity", width=1) +  geom_bar(data=negative_rr2,stat="identity", position="identity", width=1) +
+  geom_bar(data=negative_rr1,stat="identity", position="identity", width=1) +
+  geom_bar(data=positive_rr2,stat="identity", position="identity", width=1) +
+  geom_bar(data=linea,stat="identity", position="identity", width=1) +
+  geom_bar(data=lineb,stat="identity", position="identity", width=1) +
+  geom_label_repel(size=2.5, segment.size = 0.2, fill="white", fontface=3)+
+ scale_fill_manual(values=c("#d73027","#f4a582", "#abd9e9","#74add1", "#67001f","#313695"))+theme_bw()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+# 
+```
+
+Collapsing the above data to only the 33 significant regions of interest, we note the following: 1q is commonly gained in DCIS, but appears to be a hotspot region. chr 19 is an immune hotspot chromosome, and major losses are observed on chr 22.
+
+```{r}
+WindowNarrow=WindowReg[which(WindowReg$padj<Pthresh)]
+
+## dcis samples
+a1=table(WindowNarrow$NGain+WindowNarrow$NLoss)
+## abba dataset
+#table(WindowNarrow$GainAbba+WindowNarrow$LossAbba)
+
+# tempt=data.matrix(mcols(WindowNarrow)[ , c(10,11,16, 17)])
+# tempt[ ,1:2]=tempt[ ,1:2]/6
+# tempt[ ,3:4]=tempt[, 3:4]/29
+# heatmap.2(tempt, col=RdBu[11:1], scale="none", trace="none")
+
+# 
+# venn(list(All=WindowNarrow$Loc, GainAbba=WindowNarrow$Loc[which(WindowNarrow$NGain>0)], LossAbba=WindowNarrow$Loc[which(WindowNarrow$NLoss>0)]))
+# 
+# venn(list(All=WindowNarrow$Loc, GainAbba=WindowNarrow$Loc[which(WindowNarrow$GainAbba>0)], LossAbba=WindowNarrow$Loc[which(WindowNarrow$LossAbba>0)]))
+
+## common gain regions
+
+Cgain1=which(WindowNarrow$NGain>0 & WindowNarrow$NLoss==0)
+Cgain2=which(WindowNarrow$GainAbba>0 & WindowNarrow$LossAbba==0)
+#intersect(Cgain1, Cgain2)
+
+## 
+WindowNarrow$GainProp2=(WindowNarrow$NGain+WindowNarrow$GainAbba)/(29+6)
+WindowNarrow$LossProp2=(WindowNarrow$NLoss+WindowNarrow$LossAbba)/(29+6)
+
+par(oma=c(3, 0,0,0))
+barplot(WindowNarrow$GainProp2, col="#f4a582", border = NA, ylim=c(-0.5, 0.5), ylab="frequency", names.arg = WindowNarrow$cytoband , las=2)
+barplot(-WindowNarrow$LossProp2, col="#92c5de", border = NA, add=T, yaxt="none")
+
+```
+
+## Association with immune signatures in the TCGA cohort.
+
+Here, we see if there is an association with CN status and an immune signature. 
+
+Have a quick look at the Thorsson Table to see whether a signature is associated witha  particular subtype:
+
+Notes:
+- Basal are overwhelmingly C2 (IFNg, then wound headling). This is the same for Her2
+- C3 is LuminalA (inflammatory)
+
+```{r}
+
+table(ThorssonTab$`Immune Subtype`, ThorssonTab$`TCGA Subtype`)
+L1=chisq.test(table(ThorssonTab$`Immune Subtype`, ThorssonTab$`TCGA Subtype`))
+L1
+```
+
+```{r}
+# find overlaps with the window regions defined
+
+S1=findOverlaps(TCGATab,WindowNarrow) # WindowReg)
+# append all into 1 dataframe of region and average CN
+CN1a=TCGATab$CN[queryHits(S1)]
+Pat1=TCGATab$Pat[queryHits(S1)]
+RegA=subjectHits(S1)
+callA=TCGATab$call[queryHits(S1)]
+df=data.frame(Pat=Pat1, Reg=RegA, CN=CN1a)
+
+
+minmaxmatch=function(x){
+  l1=abs(unlist(x))
+  l2=which.max(l1)
+  unlist(x[l2])
+}
+
+dfcast=acast(df[ ,c(1:3)], Reg~Pat, fun.aggregate = minmaxmatch, fill=0)
+dfcastCall=dfcast
+dfcastCall[which(dfcastCall<(-0.3), arr.ind=T)]=(-1)
+dfcastCall[which(dfcastCall>(0.3), arr.ind=T)]=(1)
+dfcastCall[which(dfcastCall<=(0.3) & dfcastCall>=(-0.3), arr.ind=T)]=0
+
+# match the names in the Thorsson table with the dfcast table. Note that XXA refers to whether the same is tumor or normal blood
+MNorm=grep("-10[A|B]-", colnames(dfcast))
+MTum=grep("-01A-", colnames(dfcast))
+dfcastTum=dfcast[ ,MTum]
+dfcastCallTum=dfcastCall[ ,MTum]
+patS=substr(colnames(dfcastTum), 1,12)
+m2=match(patS, ThorssonTab$`TCGA Participant Barcode`)
+m2na=which(is.na(m2))
+
+SRTdfcastTum=dfcastTum[ ,-m2na]
+SRTdfcastCall=dfcastCallTum[ ,-m2na]
+SRTThorsson=ThorssonTab[na.omit(m2), ]
+
+rownames(SRTdfcastTum)=paste("X", which(WindowReg$padj<Pthresh)) # what went wrong here
+rownames(SRTdfcastCall)=paste("X", which(WindowReg$padj<Pthresh))
+```
+
+In order to do this, we spearate out the ER+ and ER- cases: it has been shown that some CNVs are specific to certain subtypes and combining all samples together may have a confounding effect. 
+The steps taken are: 
+* stratify samples into "loss" "neutral" or "gain" using a threshold of 0.3. 
+* A jonckheree terpsa test for trend is used to evaluate whether a gene signature increases with copy number changes or not. 
+* heatmap of correlation coefficients between CNV and expression is determined
+* squares which are not significant by JT test are omitted. Only significant differences are kept and visualised below:
+
+
+```{r, results='hide', fig.height=5, fig.width=9}
+idxM=which(SRTThorsson$`TCGA Subtype`%in%c('BRCA.LumA', 'BRCA.LumB'))
+SRTThorsson2=SRTThorsson[idxM, ]
+SRTdfcastTum2=t(SRTdfcastTum[ ,idxM])
+SRTdfcastCall2=t(SRTdfcastCall[ ,idxM])
+#RTdfcastTum2$Immune=(as.numeric(SRTThorsson$`Lymphocyte Infiltration Signature Score`))
+
+DNames=c("TIL Regional Fraction", "Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
+         "TGF-beta Response", "Wound Healing")
+
+Map2=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
+Map1=Map2
+
+for (i in 1:length(DNames)){
+Map1[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[2])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
+Map2[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) cor(SRTdfcastTum2[ ,x], as.numeric(pull(SRTThorsson2, DNames[i])), use="complete"))
+}
+
+
+Map3=Map2
+Map3[which(Map1>0.05, arr.ind=T)]=0
+colnames(Map3)=WindowNarrow$cytoband
+rownames(Map3)=DNames
+par(oma=c(4, 0,0,2))
+heatmap.2(Map3, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA, main="ER+ TCGA cohort")
+
+```
+
+```{r}
+a1=which(WindowReg$padj<Pthresh)
+WindowReg$TCGA.ERpos.Cor.TILFrac=""
+WindowReg$TCGA.ERpos.Cor.TILFrac[a1]=Map2[1, ]
+WindowReg$TCGA.ERpos.Cor.Macrophage=""
+WindowReg$TCGA.ERpos.Cor.Macrophage[a1]=Map2[2, ]
+WindowReg$TCGA.ERpos.Cor.LIscore=""
+WindowReg$TCGA.ERpos.Cor.LIscore[a1]=Map2[3, ]
+WindowReg$TCGA.ERpos.Cor.IFNG=""
+WindowReg$TCGA.ERpos.Cor.IFNG[a1]=Map2[4, ]
+WindowReg$TCGA.ERpos.Cor.TGFB=""
+WindowReg$TCGA.ERpos.Cor.TGFB[a1]=Map2[5, ]
+WindowReg$TCGA.ERpos.Cor.WoundHealing=""
+WindowReg$TCGA.ERpos.Cor.WoundHealing[a1]=Map2[6,  ]
+```
+
+
+```{r, results='hide', fig.height=5, fig.width=8}
+idxM=which(SRTThorsson$`TCGA Subtype`%in%c('BRCA.Her2', 'BRCA.Basal'))
+SRTThorsson2=SRTThorsson[idxM, ]
+SRTdfcastTum2=t(SRTdfcastTum[ ,idxM])
+SRTdfcastCall2=t(SRTdfcastCall[ ,idxM])
+#RTdfcastTum2$Immune=(as.numeric(SRTThorsson$`Lymphocyte Infiltration Signature Score`))
+
+DNames=c("TIL Regional Fraction", "Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
+         "TGF-beta Response", "Wound Healing")
+
+Map2=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
+Map1=Map2
+
+for (i in 1:length(DNames)){
+Map1[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[2])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
+Map2[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) cor(SRTdfcastTum2[ ,x], as.numeric(pull(SRTThorsson2, DNames[i])), use="complete"))
+}
+
+
+Map3=Map2
+Map3[which(Map1>0.05, arr.ind=T)]=0
+colnames(Map3)=WindowNarrow$cytoband
+rownames(Map3)=DNames
+par(oma=c(4, 0,0,2))
+heatmap.2(Map3, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA, main="ER- TCGA cohort")
+
+```
+
+```{r}
+a1=which(WindowReg$padj<Pthresh)
+WindowReg$TCGA.ERneg.Cor.TILFrac=""
+WindowReg$TCGA.ERneg.Cor.TILFrac[a1]=Map2[1, ]
+WindowReg$TCGA.ERneg.Cor.Macrophage=""
+WindowReg$TCGA.ERneg.Cor.Macrophage[a1]=Map2[2, ]
+WindowReg$TCGA.ERneg.Cor.LIscore=""
+WindowReg$TCGA.ERneg.Cor.LIscore[a1]=Map2[3, ]
+WindowReg$TCGA.ERneg.Cor.IFNG=""
+WindowReg$TCGA.ERneg.Cor.IFNG[a1]=Map2[4, ]
+WindowReg$TCGA.ERneg.Cor.TGFB=""
+WindowReg$TCGA.ERneg.Cor.TGFB[a1]=Map2[5, ]
+WindowReg$TCGA.ERneg.Cor.WoundHealing=""
+WindowReg$TCGA.ERneg.Cor.WoundHealing[a1]=Map2[6,  ]
+```
+
+
+```{r, results='hide', message=F, fig.height=5}
+## match up the information
+ImmAbba=data.frame(t(Imm2))
+ImmAbba$sample=rownames(ImmAbba)
+AClin2=merge(AbbaClin[ ,c(1, 19:24)], ImmAbba, by.x='SampleID', by.y='sample', all.x=T, all.y=T)
+
+## Figure out the CNvalues
+S1=findOverlaps(AllDCNAbbaGR, WindowNarrow)
+# append all into 1 dataframe of region and average CN
+CN1a=AllDCNAbbaGR$mean_val[queryHits(S1)]
+Pat1=AllDCNAbbaGR$sample[queryHits(S1)]
+Call1=AllDCNAbbaGR$ampDel[queryHits(S1)]
+RegA=subjectHits(S1)
+dfAbbaCNV=data.frame(Pat=Pat1, Reg=factor(RegA), CN=CN1a, Call=Call1)
+dfAbbaCNV2=data.frame()
+# make into a table
+pAbba=paste(dfAbbaCNV[ ,1], dfAbbaCNV[ ,2])
+lx1=unique(pAbba[which(duplicated(pAbba))])
+for (i in lx1){
+  id1=which(pAbba==i)
+  temp1=which.max(abs(dfAbbaCNV$CN[id1]))
+  dfAbbaCNV2=rbind(dfAbbaCNV2,dfAbbaCNV[id1[temp1], ])
+}
+
+dfAbbaCNV=rbind(dfAbbaCNV[-which(pAbba%in%lx1), ], dfAbbaCNV2)
+dfAbbaCNVcast=acast(dfAbbaCNV, Pat~Reg, value.var='CN')
+dfAbbaCNVcast[ which(dfAbbaCNVcast<(-3), arr.ind=T)]=(-3)
+dfAbbaCNVcast[which(is.na(dfAbbaCNVcast), arr.ind=T)]=0
+
+dfAbbaCNVcastCall=acast(dfAbbaCNV, Pat~Reg, value.var='Call')
+
+AbbaClin2B=AClin2[match(rownames(dfAbbaCNVcast), AClin2$SampleID), ]
+
+DNames=colnames(AbbaClin2B)[c(5, 15:19)]
+Map2=matrix(NA, ncol=ncol(dfAbbaCNVcast), nrow=length(DNames))
+Map1=Map2
+
+for (i in 1:length(DNames)){
+Map1[i, ]=sapply(1:ncol(dfAbbaCNVcastCall), function(x) JT.test(as.numeric(pull(AbbaClin2B, DNames[i])), dfAbbaCNVcastCall[ ,x], labs=c("-1", "0", "1"))$p.value)
+Map2[i, ]=sapply(1:(ncol(dfAbbaCNVcast)), function(x) cor(dfAbbaCNVcast[ ,x],as.numeric(pull(AbbaClin2B, DNames[i])), use="complete"))
+}
+
+
+Map3=Map2
+Map3[which(Map1>0.05, arr.ind=T)]=0
+colnames(Map3)=WindowNarrow$cytoband
+rownames(Map3)=DNames
+par(oma=c(4, 0,0,2))
+heatmap.2(Map3, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv=NA, main="Abba cohort of DCIS")
+```
+
+Due to small sample size, few associations are noted in the DCIS. In the IDC cases, a negative association with 1q is noted regardless of ER subtype. More associations were observed in the ER- cases including a positive association in 3p and 4q (these are CXCL clusters where chromosomal loss is specific to ER- breast cancers)
+
+Data from this analysis is saved in Table S3
+
+```{r}
+a1=which(WindowReg$padj<Pthresh)
+WindowReg$Abba.Cor.TIL=""
+WindowReg$Abba.Cor.TIL[a1]=Map2[1, ]
+WindowReg$Abba.Cor.Macrophage=""
+WindowReg$Abba.Cor.Macrophage[a1]=Map2[2, ]
+WindowReg$Abba.Cor.LIscore=""
+WindowReg$Abba.Cor.LIscore[a1]=Map2[3, ]
+WindowReg$Abba.Cor.TGFB=""
+WindowReg$Abba.Cor.TGFB[a1]=Map2[4, ]
+WindowReg$Abba.Cor.IFNG=""
+WindowReg$Abba.Cor.IFNG[a1]=Map2[5, ]
+WindowReg$Abba.Cor.WoundHealing=""
+WindowReg$Abba.Cor.WoundHealing[a1]=Map2[6, ]
+
+temp=mcols(WindowReg)
+TabB=cbind(Tab, temp)
+write.csv(TabB, file=sprintf("rslt/TableS3_Tab_immune_genome_5M_%s.csv", Sys.Date()))
+
+```
+

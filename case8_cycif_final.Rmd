@@ -1,0 +1,275 @@
+
+## Case 8
+
+Similarly, visualise the results for case 8. 
+
+```{r}
+load("data/RecurrenceCohort/cycIF/Final_cse8_data.RData")
+
+
+
+immuneMarkers=c(2,  3 , 8 ,10, 11 ,13, 19 ,24, 28, 30, 34, 40)
+luminalMarkers=c(4:7, 9, 12:14, 16:20,22, 25, 29,32:33, 36)
+
+immlabels=c("bcell", "CD4", "cd8", "Tregs","macrophage", "pd1+")
+stromaLabels=c("endothelial", "stroma", "vim+", "a-sma+")
+lumLab2=c("CK+Ecad+" ,  "CK8 lo"  ,   "CKlow"    ,  "col-hi"   ,  "ER"   ,      "Ki67+"  ,    "myeop" ,     "vim/sma", "basalLike")
+
+```
+
+### Overview of the image
+
+Plot showing the spatial distributions: We first focus on the epithelial cell types, then the immune cell types
+
+```{r, fig.height=8, cache=T}
+par(mfrow=c(1,2))
+
+P1=brewer.pal(12, "Set3")
+palette(P1)
+#memVals=case8_cellids$final
+
+memVals=case8_cellids$final2
+
+searchType=lumLab2
+
+## example whole slide 8DCIS
+## DCIS
+lx1=which(case8_cellids$type=="DCIS" & memVals%in%searchType)
+lx2=which(case8_cellids$type=="DCIS" )
+plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="8 DCIS peithelial") #xlim=c(12500, 14000), ylim=c(30500, 34000))
+points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=factor(memVals[lx1], levels=searchType), main='DCIS', pch=20, xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+
+## example whole slide 8IDC
+## IDC
+
+lx1=which(case8_cellids$type=="IDC" & memVals%in%searchType & case8_cellids$scene!="scene005")
+lx2=which(case8_cellids$type=="IDC" & case8_cellids$scene!="scene005")
+plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="8 DCIS immune") #xlim=c(12500, 14000), ylim=c(30500, 34000))
+points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=factor(memVals[lx1], levels=searchType), main='DCIS', pch=20, xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+
+
+#lx1=which(case8_cellids$type=="IDC" & memVals%in%searchType & case8_cellids$scene!="scene005")
+#lx2=which(case8_cellids$type=="IDC" & case8_cellids$scene!="scene005")
+#plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  #xlab="", ylab = "",main="8 IDC peithelial"))
+#points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=factor(memVals[lx1], #levels=searchType), main='DCIS', pch=20, cex=0.4)
+
+## example whole slide 8DCIS immune
+## DCIS
+lx1=which(case8_cellids$type=="DCIS" & memVals%in%immlabels)
+lx2=which(case8_cellids$type=="DCIS" )
+plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="8 DCIS immune") #xlim=c(12500, 14000), ylim=c(30500, 34000))
+points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=factor(memVals[lx1], levels=immlabels), main='DCIS', pch=20, xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+
+## example whole slide 8IDC immune
+## IDC
+lx1=which(case8_cellids$type=="IDC" & memVals%in%immlabels & case8_cellids$scene!="scene005")
+lx2=which(case8_cellids$type=="IDC" & case8_cellids$scene!="scene005")
+plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="8 DCIS immune") #xlim=c(12500, 14000), ylim=c(30500, 34000))
+points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=factor(memVals[lx1], levels=immlabels), main='DCIS', pch=20, xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+```
+
+
+### Compositional analysis
+
+
+Quick overview of stroma, tumor and immune composition in dcis vs idc supports what we already know. DCIS has more immune cells compared to IDC
+
+```{r}
+case8_cellids$loc=paste(case8_cellids$type, case8_cellids$scene)
+lx1=table(case8_cellids$loc[case8_cellids$final2%in%immlabels])
+lx2=table(case8_cellids$loc[case8_cellids$final2%in%stromaLabels])
+lx3=table(case8_cellids$loc[case8_cellids$final2%in%lumLab2])
+LXAll=rbind(imm=lx1, str=lx2, ep=lx3)
+Summ1=cbind(rowSums(LXAll[ ,1:10]), rowSums(LXAll[ ,11:14]))
+Summ1=t(Summ1)/colSums(Summ1)
+barplot(t(Summ1), col=c("#fdb462", "#984ea3","#8dd3c7"), names.arg=c("DCIS", "IDC"), horiz = T)
+```
+
+Barplots of specific cell types: CD8+ cells are a rare population but seems higher in DCIs compared to IDC. The proportion of Tregs increases in this transition.
+
+Epithelial cells seems to have higher expression of CKs and Ecad in the DCIs compared to the IDC
+
+```{r, fig.height=9}
+par(mfrow=c(2,2))
+
+lx1=table(case8_cellids$final2, case8_cellids$type)
+
+ lxLum=lx1[rownames(lx1)%in%lumLab2, ]
+lxLumFrac=t(lxLum)/colSums(lxLum)
+# 
+ lxImm=lx1[rownames(lx1)%in%immlabels, ]
+ lxImmFrac=t(lxImm)/colSums(lxImm)
+ 
+ lxStr=lx1[rownames(lx1)%in%stromaLabels, ]
+ lxStrFrac=t(lxStr)/colSums(lxStr)
+ 
+ barplot(lxImmFrac, beside=T, ylab = "proportion of Immune cells", col=pal2sub, las=2)
+ 
+ barplot(lxLumFrac[, lumLab2], beside=T, ylab = "proportion of Luminal cells", col=pal2sub, las=2)
+ 
+ barplot(lxStrFrac, beside=T, col=pal2sub, ylab = "proportion of stromal cells", las=2)
+
+```
+
+### Expression heatmap
+
+Make a heatmap for the different clusters based on luminal vs stromal markers. The immune cell types are indicates in darker colors and match what was shown above
+
+```{r, fig.height=8}
+xa=c(lumLab2, immlabels)
+
+CellList=sapply(xa, function(x) sample(which(case8_cellids$final2==x), 100))
+#CellList=sapply(immlabels, function(x) sample(which(case8_cellids$final==x), 50))
+
+cellAll=as.vector(CellList)
+rowsideC=rep(c(pal1[1:length(lumLab2)], cols_d4[1:length(immlabels)]), each=100)
+
+heatmap.2(case8_bck_mod[cellAll  ,luminalMarkers], col=RdBu[11:1],  scale="col", trace="none", RowSideColors = rowsideC, Rowv = NA)
+
+
+heatmap.2(case8_bck_mod[cellAll  ,immuneMarkers], col=RdBu[11:1],  scale="col", trace="none", RowSideColors = rowsideC, Rowv = NA)
+
+```
+
+### Spatial statistics:
+
+Due to the size of these images, these results were pre-run. Similar to case 9, we will plot:
+
+* the interacting fraction
+* the nearest neighbour distances
+* the M-H interacting distances
+
+#### The interacting fraction:
+
+```{r}
+# estblish the ppOut object
+
+refineArea=which(case8_cellids$type=="IDC" & case8_cellids$scene!="scene005")
+IFidc=InteractingFraction(memVals, refineArea, case8_cellids, labs=c("CD4", "cd8", "Tregs", "macrophage"), N=30)
+
+xlimVd=c(min(case8_cellids$XLocN[refineArea]), max(case8_cellids$XLocN[refineArea]))
+ylimVd=c(min(case8_cellids$YLocN[refineArea]), max(case8_cellids$YLocN[refineArea]))
+
+
+refineArea=which(case8_cellids$type=="DCIS")
+IFdcis=InteractingFraction(memVals, refineArea, case8_cellids, labs=c("CD4", "cd8", "Tregs", "macrophage"), N=30)
+
+xlimVi=c(min(case8_cellids$XLocN[refineArea]), max(case8_cellids$XLocN[refineArea]))
+ylimVi=c(min(case8_cellids$YLocN[refineArea]), max(case8_cellids$YLocN[refineArea]))
+
+
+par(mfrow=c(1,2))
+barplot(IFdcis$Fracfound, ylab="Percentage ''interacting'' with luminal", col=pal1[c(4, 3,2, 5)], main="8DCIS")
+barplot(IFidc$Fracfound, ylab="Percentage ''interacting'' with luminal", col=palcols, main="8IDC")
+
+```
+
+We can compute a z-score by permuting the immune cell labels in order to determine whether a cell type is closer or further for a given composition. 
+
+```{r}
+par(mfrow=c(1,2))
+load("data/RecurrenceCohort/cycIF/8dcis_spatial.Rdata")
+dcisknn=knnDistMatrix
+dcisdfall=cbind(dfall3, samp="dcis")
+PlotInteractingZscore(IFdcis$Fracfound, DistMat, "8DCIS", col=pal1[c(4, 2:3, 5)])
+load("data/RecurrenceCohort/cycIF/8idc_spatial.Rdata")
+PlotInteractingZscore(IFidc$Fracfound, DistMat, "8IDC")
+idcknn=knnDistMatrix
+idcdfall=cbind(dfall3, samp="idc")
+```
+
+#### knn distance analysis
+
+If we extend this distance, we can observe what the CDF of immune to epithelial interaction looks like: Firstly, for the 8DCIS cases. We use a boundary of 250 pixels from the border of the image to take into account cells which are too close to the border (and thus will artifically lengthen the interacting distance).
+
+Firstly, we will look at the DCIS cases:
+
+```{r}
+Ctypes=levels(IFdcis$ppOut$marks)[-1]
+ppOutR=IFdcis$ppOut
+
+gridsize=250
+ppInd=which(ppOutR$x>(xlimVd[1]+gridsize) & ppOutR$x<(xlimVd[2]-gridsize) & ppOutR$y>(ylimVd[1]+gridsize) & 
+              ppOutR$y<(ylimVd[2]-gridsize))
+
+
+par(mfrow=c(1, 3))
+for (i in 1:3){
+  i=1
+  ptest=matrix(NA, nrow=4, ncol=4)
+  namtest=matrix(NA, nrow=4, ncol=4)
+  for (j in 1:(length(Ctypes)-1)){
+    for (k in (j+1):length(Ctypes)){
+    ptest[j,k]=ks.test(dcisknn[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i],
+               dcisknn[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
+      namtest[j,k]=paste(Ctypes[j], Ctypes[k])
+    }}
+
+  pvals=ptest[upper.tri(ptest)]
+  names(pvals)=namtest[upper.tri(ptest)]
+
+plot(ecdf(dcisknn[ which(ppOutR$marks[ppInd]=="Treg"),1, i]), lwd=2, main=sprintf("k=%s", i*2-1 ),
+     xlim=c(0,300), col=palcols[1])
+abline(v=30)
+lines(ecdf(dcisknn[ which(ppOutR$marks[ppInd]=="CD8"),1, i]), lwd=2, col=palcols[2])
+lines(ecdf(dcisknn[ which(ppOutR$marks[ppInd]=="CD4"),1, i]), lwd=2, col=palcols[3])
+lines(ecdf(dcisknn[ which(ppOutR$marks[ppInd]=="Mac"),1, i]), lwd=2, col=palcols[4])
+legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
+}
+```
+
+Similarly, for 8 IDC:
+
+```{r}
+Ctypes=levels(IFidc$ppOut$marks)[-1]
+ppOutR=IFidc$ppOut
+
+gridsize=250
+ppInd=which(ppOutR$x>(xlimVi[1]+gridsize) & ppOutR$x<(xlimVi[2]-gridsize) & ppOutR$y>(ylimVi[1]+gridsize) & 
+              ppOutR$y<(ylimVi[2]-gridsize))
+
+par(mfrow=c(1, 3))
+for (i in 1:3){
+  i=1
+  ptest=matrix(NA, nrow=4, ncol=4)
+  namtest=matrix(NA, nrow=4, ncol=4)
+  for (j in 1:(length(Ctypes)-1)){
+    for (k in (j+1):length(Ctypes)){
+    ptest[j,k]=ks.test(idcknn[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i],
+               idcknn[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
+      namtest[j,k]=paste(Ctypes[j], Ctypes[k])
+    }}
+
+  pvals=ptest[upper.tri(ptest)]
+  names(pvals)=namtest[upper.tri(ptest)]
+
+plot(ecdf(idcknn[ which(ppOutR$marks[ppInd]=="Treg"),1, i]), lwd=2, main=sprintf("k=%s", i*2-1 ),
+     xlim=c(0,300), col=palcols[1])
+abline(v=30)
+lines(ecdf(idcknn[ which(ppOutR$marks[ppInd]=="CD8"),1, i]), lwd=2, col=palcols[2])
+lines(ecdf(idcknn[ which(ppOutR$marks[ppInd]=="CD4"),1, i]), lwd=2, col=palcols[3])
+lines(ecdf(idcknn[ which(ppOutR$marks[ppInd]=="Mac"),1, i]), lwd=2, col=palcols[4])
+legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
+}
+
+```
+
+#### Morisita-Horn index of interaction
+
+Below we combine the results of Morisita-Horn analysis for the different cell types of interest in the dcis and IDC samples. 
+Here, we look at the values if we 
+
+* shift the grid
+* omit both squares containing only immune or only tumor squares (ie. focusing on the immune-tumor boundary)
+* omit squares containing only the immune cells
+* omit squares containing only tumor cells
+
+We use the last example in publication
+
+
+```{r, fig.height=6}
+all8mh=rbind(dcisdfall, idcdfall)
+#all8mh=all8mh[which(all8mh$type=="shift_omit_tum"), ]
+
+ggplot(all8mh, aes(x=comp, y=mean, col=samp))+facet_grid(~type)+geom_point()+geom_errorbar(aes(ymin=lower, ymax=upper))+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```

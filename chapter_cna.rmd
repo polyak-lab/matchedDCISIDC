@@ -1,0 +1,500 @@
+# CN profiles
+
+## Overview of frequency of Gains and Losses
+
+It has been previously observed that gains and losses in DCIS and IDC are fairly similar, suggesting that these changes are early events. Below are the frequency plot of gains and losses in DCIS and IDC (using calls from GATK in the recurrence and Abba cohorts. In Lesurf data use a cut off of 0.3, based on total copy ratio)
+
+
+```{r, fig.height=4}
+
+meltCN=melt(CNVRec, measure.vars=c("MEAN_LOG2_COPY_RATIO"))
+AllDCN=data.frame(sampleID=meltCN$L1, chrom=meltCN$CONTIG, arm="p", start.pos=meltCN$START,
+                  end.pos=meltCN$END, n.probes=meltCN$NUM_POINTS_COPY_RATIO, mean=meltCN$value, call=meltCN$CALL)
+AllDCN$mean[which(AllDCN$call==0)]=0
+m2=sapply(1:nrow(chrInfo), function(x) which(AllDCN$start.pos>chrInfo$CEP[x]*1000000 & AllDCN$chrom==chrInfo$Chromosome[x]))
+m2new=unlist(m2)
+AllDCN$arm=as.character(AllDCN$arm)
+AllDCN$arm[m2new]="q"
+
+## manually 
+plotFreq(segments=AllDCN,thres.gain=0.1,thres.loss=-0.1, ylim=c(-70,70), main="all recurrence samples")
+
+AllDCNMod=AllDCN
+AllDCNMod$mean[grep("IDC", AllDCNMod$sampleID)]=0
+plotFreq(segments=AllDCNMod,thres.gain=0.1,thres.loss=-0.1, ylim=c(-70,70),  col.gain="pink", col.loss="skyblue", main="Only DCIS samples")
+```
+
+
+```{r, fig.height=4}
+meltCNAbba=melt(AbbaCNV, measure.vars=c("MEAN_LOG2_COPY_RATIO"))
+meltCNAbba=meltCNAbba[-grep("GL00", meltCNAbba$CONTIG), ]
+
+AllDCNAbba=data.frame(sampleID=meltCNAbba$L1, chrom=meltCNAbba$CONTIG, arm="p", start.pos=meltCNAbba$START,
+                  end.pos=meltCNAbba$END, n.probes=meltCNAbba$NUM_POINTS_COPY_RATIO, mean=meltCNAbba$value, call=meltCNAbba$CALL, mean2=meltCNAbba$value)
+AllDCNAbba$mean[which(AllDCNAbba$call==0)]=0
+m2=sapply(1:nrow(chrInfo), function(x) which(AllDCNAbba$start.pos>chrInfo$CEP[x]*1000000 & AllDCNAbba$chrom==chrInfo$Chromosome[x]))
+m2new=unlist(m2)
+AllDCNAbba$arm=as.character(AllDCNAbba$arm)
+AllDCNAbba$arm[m2new]="q"
+
+## manually 
+plotFreq(segments=AllDCNAbba,thres.gain=0.1,thres.loss=-0.1, ylim=c(-50,50), main="Abba cohort")
+```
+
+
+```{r, fig.height=4}
+thresh.gain=0.3
+thresh.loss=-0.3
+LCNVsummGain=sapply(1:nrow(dcis_logr_data), function(x) length(which(dcis_logr_data[x, ]>thresh.gain)))
+LCNVsummLoss=sapply(1:nrow(dcis_logr_data), function(x) length(which(dcis_logr_data[x, ]<thresh.loss)))
+
+LCNV=data.frame(gene=rownames(dcis_logr_data), Gains=LCNVsummGain, Loss=LCNVsummLoss,
+                chrom=gene_annot$chrom[match(rownames(dcis_logr_data), gene_annot$EntrezID)],
+                start.pos=gene_annot$StartHG19[match(rownames(dcis_logr_data), gene_annot$EntrezID)],
+                end.pos=gene_annot$EndHG19[match(rownames(dcis_logr_data), gene_annot$EntrezID)],
+                Hugo=gene_annot$Gene[match(rownames(dcis_logr_data), gene_annot$EntrezID)])
+LCNV2=LCNV[order(LCNV$chrom, LCNV$start.pos), ]
+
+LCNV2$Gains=LCNV2$Gains/ncol(dcis_logr_data)
+LCNV2$Loss=LCNV2$Loss/ncol(dcis_logr_data)
+
+x1=sapply(2:length(LCNV2$Gains), function(x) LCNV2$Gains[x]-LCNV2$Gains[x-1])
+x2=sapply(2:length(LCNV2$Loss), function(x) LCNV2$Loss[x]-LCNV2$Loss[x-1])
+x4=sapply(2:length(LCNV2$chrom), function(x) LCNV2$chrom[x]-LCNV2$chrom[x-1])
+x3=x2+x1+x4
+idx1=c(which(x3!=0), nrow(LCNV2))
+idx2=c(1,idx1[-length(idx1)]+1)
+
+## Merge segments
+LCNV3=LCNV2[idx2, ]
+LCNV3$end.pos2=LCNV2$end.pos[idx1]
+LCNV3$midPoint=rowMeans(LCNV3[ ,c("start.pos", "end.pos2")])
+LCNV3$width=LCNV3$end.pos2-LCNV3$start.pos
+
+LCNV3$loc=chrInfo$sumdist[match(LCNV3$chrom, chrInfo$Chromosome)]+LCNV3$midPoint
+
+ggplot(LCNV3, aes(x=loc, width=width))+geom_bar(aes(y=Gains, fill="red"), stat="identity")+geom_bar(aes(y=-Loss, fill="blue"), stat="identity")+ylim(c(-0.5, 0.5))+theme_bw()+geom_vline(xintercept=chrInfo$sumdist , size=0.1)+geom_vline(xintercept=chrInfo$CEPlocation, linetype="dashed", size=0.1, col="grey")+theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+scale_fill_manual(values=c( "blue", "red"))+
+  ggtitle("Lesurf cohort")
+
+```
+
+Across the three cohorts, we see recurrent gains at 1q, 8q, 17 for example, as well as losses at 8p, 16q. These have been previously been implicated in breast cancer in both DCIS as well as IDC.
+
+## Breast cancer specific gains and losses:
+
+Below, we interrogate copy number changes specifically at known breast cancer oncogenic and tumor suppressor sites. For example, MYC and ERBB2 are commonly reported gain sites whereas PTEN, BRCA1/2 are often lost. Do any of these changes appear as early as in DCIS and does it occur in a subtype-specific fashion?
+
+```{r}
+## calculate the sample specific mean
+
+intVals=lapply(1:12, function(x) findOverlaps(txOncoList, CNVRecGRanges[[x]]))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+dupSamples=lapply(hitIdx, function(x) x[which(duplicated(x))])
+## remove the duplicated samples and assign values which are higher of the two
+CNvals2=lapply(1:12, function(x) CNVRecGRanges[[x]]$total_copy_ratio[subIdx[[x]]])
+CNames=lapply(1:12, function(x) txOncoList$HUGO[hitIdx[[x]]])
+calls2=lapply(1:12, function(x) (CNVRecGRanges[[x]]$call[subIdx[[x]]]))
+TabList=lapply(1:12, function(x) data.frame(gene=factor(CNames[[x]]), CN=as.numeric(CNvals2[[x]]), calls=calls2[[x]]))
+
+checkOLaps=sapply(TabList, function(x) which(duplicated(x$gene)==T))
+CC=sapply(checkOLaps, length)
+x2=which(CC>0)
+
+for (i in x2){
+  ax=checkOLaps[[i]]#which(duplicated(TabList[[i]]$gene))
+  cidx=ax-1
+   axb=sapply(1:length(ax), function(x) which.max(abs(TabList[[i]]$CN[c(ax[x], cidx[x])])))
+  keepIdx=sapply(1:length(axb), function(x) c(ax[x],cidx[x])[axb[x]])
+  TabList[[i]]=TabList[[i]][-c(setdiff(c(ax,cidx), keepIdx)), ]
+}
+
+names(TabList)=names(CNVRec)
+Mlist=melt(TabList)
+MlistReshape=acast(Mlist[ ,c(1,4:5)], gene~L1, fun.aggregate = mean)
+
+MlistReshape[which(MlistReshape<(-1), arr.ind=T)]=(-1.5)
+MlistReshape3=matrix(as.numeric(as.character(MlistReshape)), nrow=nrow(MlistReshape), byrow =F)
+
+rownames(MlistReshape3)=rownames(MlistReshape)
+mx2=rowSums(abs(MlistReshape3))
+
+colnames(MlistReshape3)=names(CNVRec)
+chrNames=as.numeric(seqnames(txOncoList)[match(rownames(MlistReshape3), txOncoList$HUGO)])
+geneLoc=start(ranges(txOncoList[match(rownames(MlistReshape3), txOncoList$HUGO)]))
+MlistReshape3=data.frame(MlistReshape3, chr=chrNames,Loc=geneLoc, genes=as.character(rownames(MlistReshape3)))
+MlistReshape3$rSum=rowSums(MlistReshape3[ ,1:12])
+
+colnames(MlistReshape3)[1:12]=names(CNVRec)
+
+MlistReshape3=MlistReshape3[order(MlistReshape3$rSum), ]
+MlistReshape3$genes=factor(MlistReshape3$genes, levels=MlistReshape3$genes)
+
+DnewOnc=melt(MlistReshape3, measure.vars = c("1DCIS", "2DCIS","3DCIS", "8DCIS","5DCIS", "9DCIS",  "1IDC","2IDC","3IDC","8IDC","5IDC","9IDC"))
+DnewOnc$case=substr(DnewOnc$variable, 2, 6)
+DnewOnc$pat=substr(DnewOnc$variable, 1, 1)
+DnewOnc$call=Mlist$calls[match(paste(DnewOnc$genes, DnewOnc$variable),paste(Mlist$gene, Mlist$L1) )]
+
+DnewOncBreast=DnewOnc[DnewOnc$genes%in%breastGeneList, ]
+DnewOncBreast=DnewOncBreast[order(DnewOncBreast$Loc), ]
+DnewOncBreast$genes=factor(DnewOncBreast$genes, levels=unique(DnewOncBreast$genes))
+## plot the recurrence set
+ggplot(data=DnewOncBreast, aes(x=genes, y=variable, fill=value))+geom_tile()+facet_grid(pat~chr,scales="free", space="free_x")+
+  scale_fill_gradient2( low = "blue", high = "red")+theme(axis.text.x=element_text(angle=90, vjust=.8, hjust=1.01))+ggtitle(label="Recurrence set")
+```
+
+
+```{r}
+## Abba set
+intVals=lapply(AbbaGRanges, function(x) findOverlaps(txOncoList, x))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+dupSamples=lapply(hitIdx, function(x) x[which(duplicated(x))])
+## remove the duplicated samples and assign values which are higher of the two
+CNvals2=lapply(1:length(AbbaGRanges), function(x) (AbbaGRanges[[x]]$total_copy_ratio[subIdx[[x]]]))
+calls2=lapply(1:length(AbbaGRanges), function(x) (AbbaGRanges[[x]]$call[subIdx[[x]]]))
+CNames=lapply(hitIdx, function(x) txOncoList$HUGO[x])
+TabList=lapply(1:length(AbbaGRanges), function(x) data.frame(gene=factor(CNames[[x]]), CN=as.numeric(CNvals2[[x]]), calls=calls2[[x]]))
+# if many regions map to a gene, take an average?
+checkOLaps=sapply(TabList, function(x) which(duplicated(x$gene)==T))
+CC=sapply(checkOLaps, length)
+x2=which(CC>0)
+
+for (i in x2){
+  ax=TabList[[i]]$gene[checkOLaps[[i]]]#which(duplicated(TabList[[i]]$gene))
+  cidx=lapply(ax, function(x) which(TabList[[i]]$gene==x))
+  #ungene=unique(TabList[[i]]$gene[cidx])
+  axb=sapply(cidx, function(x) which.max(abs(TabList[[i]]$CN[x])))
+  keepIdx=sapply(1:length(axb), function(x) setdiff(cidx[[x]], cidx[[x]][axb[x]]))
+  TabList[[i]]=TabList[[i]][-unique(unlist(keepIdx)), ]
+}
+
+names(TabList)=names(AbbaGRanges)
+
+Mlist=melt(TabList)
+MlistReshape=acast(Mlist[ ,c(1,4:5)], gene~L1)
+
+MlistReshape[which(MlistReshape<(-1), arr.ind=T)]=(-1)
+MlistReshape[which(MlistReshape>1, arr.ind=T)]=1
+chrNames=as.numeric(seqnames(txOncoList)[match(rownames(MlistReshape), txOncoList$HUGO)])
+geneLoc=start(ranges(txOncoList[match(rownames(MlistReshape), txOncoList$HUGO)]))
+MlistReshape3=data.frame(MlistReshape, chr=chrNames,Loc=geneLoc, genes=as.character(rownames(MlistReshape)))
+
+MlistReshape3=MlistReshape3[order(MlistReshape3$chr, MlistReshape3$Loc) ,  ]
+
+AbbaDnewOnc=melt(MlistReshape3, id.vars = c("chr", "Loc", "genes"))
+AbbaDnewOnc$case=substr(AbbaDnewOnc$variable, 7, 10)
+AbbaDnewOnc$pat=substr(AbbaDnewOnc$variable, 1, 5)
+AbbaDnewOnc$subtype=AbbaClin$`PAM50 call`[match(AbbaDnewOnc$pat, AbbaClin$SampleID)]
+
+AbbaDnewOnc$call=Mlist$calls[match(paste(AbbaDnewOnc$genes, AbbaDnewOnc$pat),paste(Mlist$gene, Mlist$L1) )]
+ AbbaDnewOncBreast=AbbaDnewOnc[which(AbbaDnewOnc$genes%in%breastGeneList), ]
+ AbbaDnewOncBreast=AbbaDnewOncBreast[order(AbbaDnewOncBreast$Loc), ]
+ 
+ AbbaDnewOncBreast$genes=factor(AbbaDnewOncBreast$genes, levels=unique(AbbaDnewOncBreast$genes))
+ 
+### repeat with Lesurf set
+breast_annot=gene_annot[gene_annot$Gene%in%OncoList$Gene.Symbol, ]
+breast_annot=breast_annot[order(breast_annot$chrom, breast_annot$StartHG19), ]
+LBreastSpec=dcis_logr_data[match(breast_annot$EntrezID, rownames(dcis_logr_data)), ]
+
+hclust_avg <- hclust(dist(t(LBreastSpec)), method = 'ward')
+
+LBreastSpec=LBreastSpec[ ,hclust_avg$order]
+
+LBreastSpec$Gene=breast_annot$Gene
+LBreastSpec$chrom=breast_annot$chrom
+LBreastSpec$pos=breast_annot$StartHG19
+
+LBreastmelt=melt(LBreastSpec, id.vars=c("Gene", "chrom", "pos"))
+LBreastmelt$subtype=dcis_annot$PAM50[match(LBreastmelt$variable, rownames(dcis_annot))]
+LBreastmelt$call=ifelse(LBreastmelt$value>0.3, 2, ifelse(LBreastmelt$value<(-0.3), (-3), NA))
+
+### Merge the above two plots together:
+
+colnames(AbbaDnewOnc)=c("chrom", "pos", "Gene", "variable", "value", "X", "Y", "subtype", "call")
+d2=rbind( LBreastmelt, AbbaDnewOnc[ ,-match(c("X", "Y"), colnames(AbbaDnewOnc))])
+d2=d2[which(d2$Gene%in%breastGeneList), ]
+d2=d2[order(d2$pos), ]
+d2$Gene=factor(d2$Gene, levels=unique(d2$Gene))
+
+
+p=ggplot(d2, aes(x=Gene, y=variable, fill=value))+geom_tile()+facet_grid(subtype~chrom,scales="free", space="free_x")+
+  scale_fill_gradient2( low = "blue", high = "red")+theme(axis.text.x=element_text(angle=90, vjust=.8, hjust=1.01))+ggtitle(label="Combined Abba and Lesurf set")
+
+gp <- ggplotGrob(p)
+# get gtable columns corresponding to the facets (5 & 9, in this case)
+facet.rows <- gp$layout$t[grepl("panel", gp$layout$name)]
+
+# get the number of unique x-axis values per facet (1 & 3, in this case)
+x.var <- sapply(ggplot_build(p)$layout$panel_scales_y,
+                function(l) length(l$range$range))
+
+# change the relative widths of the facet columns based on
+# how many unique x-axis values are in each facet
+gp$heights[facet.rows] <- gp$heights[facet.rows] * x.var
+
+# plot result
+grid::grid.draw(gp)
+```
+
+From thes above plots, common gains in DCIS appears to occur at ERBB2, although this is not unique to cases which are Her2+ by PAM50 subtyping. Indeed, gains have also been noted in Basal, LumA and LumB cases in the above plots.
+
+MYC is observed to be gained, although not to the same extent as Erbbb2. TP53 seems to be a common loss site, as is CTCF and CDH1 (specifically in the Lesurf set, however, possibly in a subcloal manner)
+
+
+## Immune related CNVs
+
+Copy number changes in immune checkpoint proteins or MHC proteins have been implicated as potential mechanisms of immune evasion. Here, we evaluate copy number changes at these sites to evaluate:
+
+* is there a common gain or lost hotspot which could have an immune implication?
+* what is the frequency of these hotspots in DCIS?
+* How do these changes associate with gene expression profiles: Is there a reduction in expression in a lost gene for example?
+
+### Immune related copy number profiles:
+
+
+Note that genes have been annotated according to their function: M inidcates the gene has a role in MHC-I presentation, I indicates it is an inhibitory checkpoint (overexpression would be associated with lower immune activity), A indicates it would have an activating function , and those which are not labelled could go in either direction.
+
+```{r}
+intVals=lapply(1:12, function(x) findOverlaps(ImmSpec, CNVRecGRanges[[x]]))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+dupSamples=lapply(hitIdx, function(x) x[which(duplicated(x))])
+## remove the duplicated samples and assign values which are higher of the two
+CNvals2=lapply(1:length(CNVRecGRanges), function(x) (CNVRecGRanges[[x]]$total_copy_ratio[subIdx[[x]]]))
+CNames=lapply(hitIdx, function(x) ImmSpec$HUGO[x])
+TabList=lapply(1:length(CNVRecGRanges), function(x) data.frame(gene=factor(CNames[[x]]), CN=as.numeric(CNvals2[[x]])))
+# if many regions map to a gene, take an average?
+A1=lapply(TabList, function(x) stack(by(x$CN, x$gene, mean)))
+
+names(A1)=names(CNVRec)
+
+Mlist=melt(A1)
+MlistReshape=acast(Mlist[ ,c(1,3:4)], ind~L1)
+
+
+MlistReshape[which(MlistReshape<(-2), arr.ind=T)]=(-2)
+MlistReshape[which(MlistReshape>2, arr.ind=T)]=2
+chrNames=as.numeric(seqnames(ImmSpec)[match(rownames(MlistReshape), ImmSpec$HUGO)])
+geneLoc=start(ranges(ImmSpec[match(rownames(MlistReshape), ImmSpec$HUGO)]))
+
+MlistReshape3=data.frame(MlistReshape, chr=chrNames,Loc=geneLoc, genes=as.character(rownames(MlistReshape)))
+MlistReshape3$rSum=rowSums(MlistReshape3[ ,1:12])
+
+colnames(MlistReshape3)[1:12]=names(CNVRec)
+
+MlistReshape3=MlistReshape3[order(MlistReshape3$rSum), ]
+MlistReshape3$genes=factor(MlistReshape3$genes, levels=MlistReshape3$genes)
+
+DnewImm=melt(MlistReshape3, measure.vars = c("1DCIS", "2DCIS","3DCIS", "8DCIS","5DCIS", "9DCIS",  "1IDC","2IDC","3IDC","8IDC","5IDC","9IDC"))
+DnewImm$case=substr(DnewImm$variable, 2, 6)
+DnewImm$pat=substr(DnewImm$variable, 1, 1)
+
+
+lx1=which(DnewImm$genes%in%MHCpres)
+lx2=which(DnewImm$genes%in%unlist(ImmSuppAPC))
+
+DImmTest=DnewImm[c(lx1, lx2), ]
+
+DImmTest$type=NA
+DImmTest$type[na.omit(match(ImmSuppAPC[[2]], DImmTest$genes))]="A"
+DImmTest$type[na.omit(match(ImmSuppAPC[[1]], DImmTest$genes))]="I"
+DImmTest$type[na.omit(match(MHCpres, DImmTest$genes))]="M"
+
+DImmTest=DImmTest[order(DImmTest[ ,1], DImmTest[ ,2]), ]
+DImmTest$genes=factor(DImmTest$genes, unique(DImmTest$genes))
+
+DImmTestlvls=DImmTest$type[-which(duplicated(DImmTest$genes))]
+
+ggplot(data=DImmTest, aes(x=genes, y=variable, fill=value, label=type))+geom_tile()+facet_grid(pat~chr,scales="free", space="free_x")+
+  scale_fill_gradient2( low = "blue", high = "red")+theme(axis.text.x=element_text(angle=90, vjust=.8, hjust=1.01))+geom_text()
+
+```
+
+
+```{r}
+# same for the Abba and Lesurf sets
+intVals=lapply(AbbaGRanges, function(x) findOverlaps(ImmSpec, x))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+dupSamples=lapply(hitIdx, function(x) x[which(duplicated(x))])
+## remove the duplicated samples and assign values which are higher of the two
+CNvals2=lapply(1:length(AbbaGRanges), function(x) (AbbaGRanges[[x]]$total_copy_ratio[subIdx[[x]]]))
+calls2=lapply(1:length(AbbaGRanges), function(x) (AbbaGRanges[[x]]$call[subIdx[[x]]]))
+CNames=lapply(hitIdx, function(x) ImmSpec$HUGO[x])
+TabList=lapply(1:length(AbbaGRanges), function(x) data.frame(gene=factor(CNames[[x]]), CN=as.numeric(CNvals2[[x]]), calls=calls2[[x]]))
+
+# if many regions map to a gene, take an average?
+checkOLaps=sapply(TabList, function(x) which(duplicated(x$gene)==T))
+CC=sapply(checkOLaps, length)
+x2=which(CC>0)
+
+for (i in x2){
+  ax=which(duplicated(TabList[[i]]$gene))
+  cidx=c(ax-1 ,ax)
+  axb=which.max(abs(TabList[[i]]$CN[cidx]))
+  TabList[[i]]=TabList[[i]][-cidx[setdiff(1:length(cidx), axb)], ]
+}
+
+names(TabList)=names(AbbaGRanges)
+
+Mlist=melt(TabList)
+MlistReshape=acast(Mlist[ ,c(1,4:5)], gene~L1)
+MlistReshape[which(MlistReshape<(-2), arr.ind=T)]=(-2)
+MlistReshape[which(MlistReshape>2, arr.ind=T)]=2
+chrNames=as.numeric(seqnames(ImmSpec)[match(rownames(MlistReshape), ImmSpec$HUGO)])
+geneLoc=start(ranges(ImmSpec[match(rownames(MlistReshape), ImmSpec$HUGO)]))
+MlistReshape3=data.frame(MlistReshape, chr=chrNames,Loc=geneLoc, genes=as.character(rownames(MlistReshape)))
+
+MlistReshape3=MlistReshape3[order(MlistReshape3$chr, MlistReshape3$Loc),  ]
+
+AbbaDnewImm=melt(MlistReshape3, id.vars = c("chr", "Loc", "genes"))
+AbbaDnewImm$case=substr(AbbaDnewImm$variable, 7, 10)
+AbbaDnewImm$pat=substr(AbbaDnewImm$variable, 1, 5)
+AbbaDnewImm$subtype=AbbaClin$`PAM50 call`[match(AbbaDnewImm$pat, AbbaClin$SampleID)]
+
+x1=which(is.na(AbbaDnewImm$value))
+for (i in 1:length(x1)){
+  ax=AbbaDnewImm[x1[i], ]
+  samp1=which(AbbaDnewImm$pat==ax$pat & AbbaDnewImm$chr==ax$chr)
+  bx=AbbaDnewImm[samp1, ]
+  t2=bx$Loc-ax$Loc
+  x3=which(t2==0)
+  AbbaDnewImm$value[x1[i]]=mean(c(bx$value[x3-2],bx$value[x3-1], bx$value[x3+1], bx$value[x3+2]), na.rm=T)
+}
+
+
+AbbaDnewImm$call=Mlist$calls[match(paste(AbbaDnewImm$genes, AbbaDnewImm$pat),paste(Mlist$gene, Mlist$L1) )]
+
+## repeat with Lesurf set
+breast_annot=gene_annot[gene_annot$Gene%in%ImmSpec$HUGO, ]
+breast_annot=breast_annot[order(breast_annot$chrom, breast_annot$StartHG19), ]
+LBreastSpec=dcis_logr_data[match(breast_annot$EntrezID, rownames(dcis_logr_data)), ]
+
+LBreastSpec$Gene=breast_annot$Gene
+LBreastSpec$chrom=breast_annot$chrom
+LBreastSpec$pos=breast_annot$StartHG19
+LBreastmelt2=melt(LBreastSpec, id.vars=c("Gene", "chrom", "pos"))
+LBreastmelt2$subtype=dcis_annot$PAM50[match(LBreastmelt2$variable, rownames(dcis_annot))]
+
+## Abba set
+
+lx1=which(AbbaDnewImm$genes%in%MHCpres)
+lx2=which(AbbaDnewImm$genes%in%unlist(ImmSuppAPC))
+
+AImmTest=AbbaDnewImm[c(lx1, lx2), ]
+
+AImmTest$type=NA
+AImmTest$type[na.omit(match(ImmSuppAPC[[2]], AImmTest$genes))]="A"
+AImmTest$type[na.omit(match(ImmSuppAPC[[1]], AImmTest$genes))]="I"
+AImmTest$type[na.omit(match(MHCpres, AImmTest$genes))]="M"
+
+LImmmelt=LBreastmelt2[LBreastmelt2$Gene %in% unique(AImmTest$genes), ]
+
+## combine all the cases together
+T1=LImmmelt[ ,c(2, 3, 1, 4, 5, 6)]
+colnames(T1)=colnames(AImmTest)[c( 1:5, 8)]
+
+SecCohort=rbind(AImmTest[ ,c( 1:5, 8)], T1)
+SecCohort=SecCohort[order(SecCohort[ ,1], SecCohort[ ,2]),  ]
+SecCohort$genes=factor(SecCohort$genes, levels=unique(SecCohort$genes))
+
+p=ggplot(SecCohort, aes(x=genes, y=variable, fill=value))+geom_tile()+facet_grid(subtype~chr,scales="free", space="free_x")+
+  scale_fill_gradient2( low = "blue", high = "red")+theme(axis.text.x=element_text(angle=90, vjust=.8, hjust=1.01))+ggtitle(label="Lesurf set")
+
+gp <- ggplotGrob(p)
+# get gtable columns corresponding to the facets (5 & 9, in this case)
+facet.rows <- gp$layout$t[grepl("panel", gp$layout$name)]
+
+# get the number of unique x-axis values per facet (1 & 3, in this case)
+x.var <- sapply(ggplot_build(p)$layout$panel_scales_y,
+                function(l) length(l$range$range))
+
+gp$heights[facet.rows] <- gp$heights[facet.rows] * x.var
+
+# plot result
+grid::grid.draw(gp)
+```
+
+Notes:
+
+* Some regions are commonly gained (1q) but has activating proteins eg. CD48, TNFS4
+* IDO1 loss is noted in 9DCIS and IDC, and could contribute to immunosuppression?
+* There seems to be loss of MHC-I genes in many cases
+
+Below, we will investigate MHC-I and IDO1: Look at the proportion of cases who have had subclonal losses in MHC-I presenting genes in the Abba and the Lesurf sets?
+
+```{r}
+unique(AbbaDnewImm[AbbaDnewImm$genes%in%MHCpres & AbbaDnewImm$call=="-", "variable"])
+unique(LImmmelt[LImmmelt$Gene%in%MHCpres & LImmmelt$value<(-0.3), "variable"])
+```
+
+There are 7 patients in the Abba set and 2 in the Lesurf who show losses in MHC-presenting genes.
+
+IDO1 expression was noted in Case9 and Case 2 as a possible contributor to immunosuppression. Is this checkpoint protein also gained in the Abba or the Lesurf cohorts?
+
+```{r}
+table(AbbaDnewImm[AbbaDnewImm$genes=="IDO1" , "call"])
+table(cut(LImmmelt[LImmmelt$Gene=="IDO1", "value"], c(-4, -0.3, 0.3, 4), c("loss", "neu", "gain")))
+```
+
+
+### Expression profiles of immune-related genes
+
+Is there an association between copy number profiles and expression profiles: a link would provide stronger evidence of a causative effect. Firstly in the DCIS-IDC cohort:
+
+```{r}
+MTableB=normalizedTableVSD[(match(unique(DImmTest$genes), rownames(normalizedTableVSD))), ]
+MTableB=MTableB[ ,order(colnames(MTableB))]
+MTableB2=scale(t(MTableB))
+heatmap.2(MTableB2[-(grep("str", rownames(MTableB2))),], col=RdBu[11:1], trace="none", Colv = NA, Rowv = NA)
+```
+
+
+```{r}
+AbbaTabImm=VSDAbba[match(unique(DImmTest$genes),rownames(VSDAbba)), ]
+heatmap.2(scale(t(AbbaTabImm)), col=RdBu[11:1], trace="none", Colv = NA, Rowv = NA, main="Gene expression Abba set")
+
+
+AbbaTabImm2=AbbaTabImm[, match(unique(AImmTest$pat), colnames(AbbaTabImm))]
+## for each gene, is there a correlation
+unGene=rownames(AbbaTabImm)
+out1=sapply(unGene, function(x) cor(AImmTest$value[AImmTest$genes==x],
+                                    AbbaTabImm2[x, ], use="complete", method="spearman"))
+p1=sapply(unGene, function(x) cor.test(AImmTest$value[AImmTest$genes==x],
+                                    AbbaTabImm2[x, ], use="complete", method="spearman")$p.value)
+
+```
+
+
+
+In the Abba/Lesurf sets, we have enough patients in order to calculate a correlation coefficient between the expression value and copy number abberations. Below is the correlation between CNV and expression in the Abba and Lesurf cohorts. PSME3 shows a strong association between CNV and expression profiles in both cohorts and is involved in MHC-I presentation. PSMA7 and other MHC-I presenting genes also display this assocaition in the Lesurf data set. CD274, or PDL1, shows an association in the Abba cohort supporting our previous observation that gain of this locus could contribute to increased expression. 
+
+
+```{r, fig.height=6}
+x1=gene_annot[which(gene_annot$Gene%in%unique(AImmTest$genes)), ]
+LImmGE=dcis_expr_data[match(x1$EntrezID, rownames(dcis_expr_data)), ]
+rownames(LImmGE)=x1$Gene
+
+LImmGE2=LImmGE[ ,match(unique(T1$variable), colnames(LImmGE))]
+
+out2=sapply(unGene, function(x) cor(T1$value[T1$genes==x],
+                                    t(LImmGE2[x, ]), use="complete", method="spearman"))
+p2=sapply(unGene, function(x) cor.test(T1$value[T1$genes==x],
+                                    t(LImmGE2[x, ]), use="complete", method="spearman")$p.value)
+
+ax1=which(p1<0.1 & p2<0.1)
+Col1=rep("black", length(out1))
+Col1[which(p1<0.1)]="pink"
+Col1[which(p2<0.1)]="pink"
+Col1[which(p2<0.1 & p1<0.1)]="blue"
+
+plot(out1, out2, xlab="Abba", ylab="Lesurf", col=Col1, pch=19, xlim=c(-0.7, 0.7), ylim=c(-0.3, 0.6))
+texto=names(out1)
+texto[which(Col1=="black")]=""
+text(out1+0.02, out2+0.02, texto)
+```
+
+

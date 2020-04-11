@@ -1,0 +1,516 @@
+
+# Neoantigens
+
+## Summary of neoantigens
+
+Neoantigenes were predicted using [NetMHCpan server](http://www.cbs.dtu.dk/index.html) after mutation calling. From this, we obtain predicted affinities of peptides of length 8-12 to patient HLAs. Binders were filtered to have a \% rank of at least 2 \% (weak binders) and 0.5\% for strong binders.  
+
+To determine whether these neoantigens could be relevant, we check for expression in the RNA-seq data (at least 2 reads): this would be indicative of whether the peptide is presented or not. 
+
+Some mutations would not be detected in the RNA-seq data at all, this could be due to low read depth. We can use a beta-binomial model to find the minimum number of reads required to see at least 2 reads with 95\% probability (based on allelic frequency in DNA data).
+
+Note that we can infer 
+- prob from the DNA data (no alt/all alleles)
+- size is 2
+- p is 0.95
+
+```{r}
+
+# get the appropriate DNA depths for each case from the Mutation data
+
+# if there are duplicate values at the same locus, remove these.
+# function to also do a ebayes correction on VAF
+# input: NLExpr
+# Mutall: need columns on chr,
+
+## annoate Mutall2 with additional neoantigen binding information
+
+for (i in 1:length(NeoList)){
+  x1=match(paste(NeoList[[i]]$Hugo_Symbol, NeoList[[i]]$Start_position), 
+           paste(Mutall2[[i]]$Hugo_Symbol, Mutall2[[i]]$Start_position))
+  x3=na.omit(unique(x1))
+  
+  TempTab=matrix(NA, nrow=length(x3), ncol=4)
+  
+  for (j in 1:length(x3)){
+    x2=which(x1==x3[j])
+    TempTab[j,1]=paste(NeoList[[i]][x2, "peptide"], collapse=",")
+    TempTab[j,2]=paste(NeoList[[i]][x2, "nM"], collapse=",")
+    TempTab[j,3]=paste(NeoList[[i]][x2, "Rank"], collapse=",")
+    TempTab[j,4]=paste(NeoList[[i]][x2, "HLAType"], collapse=",")
+  }
+
+  Mutall2[[i]]$NeoPeptide=NA  
+  Mutall2[[i]]$NeoPeptide[x3]=TempTab[ ,1]
+  Mutall2[[i]]$NeoAffinitynM=NA  
+  Mutall2[[i]]$NeoAffinitynM[x3]=TempTab[ ,2]
+  Mutall2[[i]]$NeoRank=NA  
+  Mutall2[[i]]$NeoRank[x3]=TempTab[ ,3]
+  Mutall2[[i]]$HLABinder=NA  
+  Mutall2[[i]]$HLABinder[x3]=TempTab[ ,4]
+}
+
+
+NeoListExprMod=AppendDNAMut(NeoListExpr, Mutall2)
+NeoListExprMod=EBayesCorr(NeoListExprMod)
+```
+
+```{r}
+# plot here
+HBind=sapply(NeoList, function(x) length(unique(x$cDNA_Change[which(x$Binder=="SB")])))
+WBind=sapply(NeoList, function(x) length(unique(x$cDNA_Change[which(x$Binder=="WB")])))
+TTab=rbind( WBind, HBind)
+
+Nexpr=sapply(NeoListExprMod, function(x) length(which(x$Alt>=2)))
+NlowCount=sapply(NeoListExprMod, function(x) length(which(x$PcritDepth>x$SSum & x$Alt==0)))
+
+CCTab=rbind( NlowCount, Nexpr)
+
+lx1=match(colnames(CCTab), colnames(TTab))
+RTab=matrix(0, ncol=ncol(TTab), nrow=2)
+RTab[ ,lx1]=CCTab
+
+Mnew=rbind(TTab, RTab)
+
+barplot((Mnew), beside=T, names.arg = substr(names(NeoList), 1, 5), las=2, col=c("#a6cee3", "#1f78b4", "#fdbf6f","#ff7f00"),  ylab="predicted HLA-recognised neoantigens")
+legend("topleft", c("strong", "weak", "counts too low", "expressed"), col=c("#1f78b4", "#a6cee3","#fdbf6f","#ff7f00"), pch=19)
+```
+
+## Association between mutational burden and neoantigen laod
+
+Mutational burden has been previously been associated with neoantigen load (since one is used to directly infer the other). We see high correlation in both our recurrence cohort as well as in the Abba cohort. 
+
+
+```{r}
+Sdiff=sapply(NeoList, function(x) length(unique(x$geneID)))
+m1=lm(Sdiff~MutTableR[4, ])
+
+df1=data.frame(Neo=Sdiff, Mut=MutTableR[4, ], AllMut=MutTableR[1, ])
+
+cor1=cor.test(df1$AllMut, df1$Neo)
+cor2=cor.test(df1$Mut, df1$Neo)
+
+p1<-ggplot(df1, aes(x=AllMut, y=Neo)) + 
+  geom_point()+
+  geom_smooth(method=lm,fill="blue")+ggtitle("All Mutations")+
+  annotate(geom="text", x=25, y=250, label=sprintf("cor = %s, p= %s", cor1$estimate, cor1$p.value))
+
+p2<-ggplot(df1, aes(x=Mut, y=Neo)) + 
+  geom_point()+
+  geom_smooth(method=lm,fill="blue")+ggtitle("Pathologic Mutations")+
+  annotate(geom="text", x=25, y=250, label=sprintf("cor = %s, p= %s", cor2$estimate, cor2$p.value))
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    nrow = cols, ncol = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+
+multiplot(p1, p2)
+```
+
+Abba cohort:
+
+```{r}
+Sdiff=sapply(MHCAbba, function(x) length(unique(x$geneID)))
+
+#Do a plot of the proportion of mutations and neoantigens
+#plot(Sdiff, MI2, xlab="No of mutations predicted as neoantigens", ylab="number of pathologic mutations", log.x=T)
+df1=data.frame(Neo=Sdiff, Mut=MI2, AllMut=MI1)
+
+cor1=cor.test(df1$AllMut, df1$Neo)
+cor2=cor.test(df1$Mut, df1$Neo)
+
+p1<-ggplot(df1, aes(x=AllMut, y=Neo)) + 
+  geom_point()+
+  geom_smooth(method=lm,fill="blue")+ggtitle("All Mutations")+
+  annotate(geom="text", x=25, y=250, label=sprintf("cor = %s, p= %s", cor1$estimate, cor1$p.value))
+
+p2<-ggplot(df1, aes(x=Mut, y=Neo)) + 
+  geom_point()+
+  geom_smooth(method=lm,fill="blue")+ggtitle("Pathologic Mutations")+
+  annotate(geom="text", x=25, y=250, label=sprintf("cor = %s, p= %s", cor2$estimate, cor2$p.value))
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    nrow = cols, ncol = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+
+
+multiplot(p1, p2)
+
+```
+
+## HLA plots of neoantigen frequency
+
+Each peptide has a binding affinity to a specific HLA. Here, we overlay the neoantigen frequency over the HLA type in each case and rank them in order of total neoantigen burden. We see that some HLAs are more common than others e.g. A02:01. There is some variability across the HLAs from the same patient, but there are no large outliers. 
+
+```{r}
+NeoListExprModAbba=AppendDNAMut(NeoListExprAbba, AMutall)
+NeoListExprModAbba=EBayesCorr(NeoListExprModAbba)
+# Abba HLA Types
+
+mx1=unique(MHCAbbaDF$L1)
+TypeVals=HLAAbba[match(mx1, rownames(HLAAbba)), ]
+TypeVals2=sapply(1:6, function(x) gsub(":", "\\.", TypeVals[ ,x]))
+letval=rep(c("A", "B", "C"), each=2)
+TypeVals2=sapply(1:6, function(x) gsub("[A-C]", paste("HLA.", letval[x], sep="") ,TypeVals2[ ,x]))
+  
+mx2=sapply(mx1, function(x) length(unique(MHCAbbaDF$geneID[which(MHCAbbaDF$L1==x)]))) ## need to check if this is unique no# a
+mx3=sapply(1:length(mx1), function(x) rowSums(sign(table(factor(MHCAbbaDF$HLAType[which(MHCAbbaDF$L1==mx1[x])], levels=unique(TypeVals2[x, ])), MHCAbbaDF$geneID[which(MHCAbbaDF$L1==mx1[x])]))))
+
+names(mx3)=mx1
+mx4Melt=lapply(mx3, function(x) table(x, names(x)))
+mx4Melt2=melt(mx4Melt)
+mx4Melt2=mx4Melt2[-which(mx4Melt2$value==0), ]
+mx4Melt2$y=mx2[match(mx4Melt2$L1, mx1)]
+
+
+ mx4Melt2$Allele=substr(mx4Melt2$Var2, 5,5)
+ mx4Melt2$Var3=substr(mx4Melt2$Var2, 5, 10)
+ Var1=sapply(mx1, function(x) mean(mx4Melt2$x[which(mx4Melt2$L1==x)]))
+ v2=sort(Var1)
+# ## Summary of HLAs
+
+
+M1=melt(OverLapTabl)
+M1$Allele=substr(M1$Var2, 5,5)
+M1$No=substr(M1$Var2, 6,12)
+
+## add a box around the strong binders identified?
+# number of peptides predicted to bind to each HLA
+idx1=paste(M1$Allele, M1$No, sep="")
+idx1=gsub("-","\\.", M1$Var2)
+idx1=gsub(":", "\\.", idx1)
+Mtab2=sapply(NeoList, function(x) table(factor(x$HLAType,unique(idx1 ))))
+Mtab=log10(Mtab2+1)
+
+Mtab2=sapply(NeoList, function(x) rowSums(sign(table(factor(x$HLAType,unique(idx1)), x$geneID))))
+
+Sdiff=sapply(NeoList, function(x) length(unique(x$geneID)))
+Mtab3=t(t(Mtab2)/Sdiff)
+
+MMtab=melt(Mtab3)
+MM2melt=melt(Mtab2)
+MMtab$RawCount=MM2melt$value
+MMtab$VarNew=paste("HLA", MMtab$Var1, sep="-")
+MMtabDCIS=MMtab[grep("DCIS", MMtab$Var2),  ]
+MMtabIDC=MMtab[grep("IDC", MMtab$Var2),  ]
+MMtabDCIS=MMtabDCIS[order(MMtabDCIS$Var1, MMtabDCIS$Var2), ]
+MMtabIDC=MMtabIDC[order(MMtabIDC$Var1, MMtabIDC$Var2), ]
+
+M1$DCISpeptides=MMtabDCIS$value
+M1$IDCpeptides=MMtabIDC$value
+
+M1$rawDCIS=MMtabDCIS$RawCount
+M1$rawIDC=MMtabIDC$RawCount
+
+M1$case1=paste(M1$Var1, "DCIS")
+M2=M1
+M2$case1=paste(M1$Var1, "IDC")
+M2$DCISpeptides=M2$IDCpeptides
+M3=rbind(M1, M2)
+M3$DCISpeptides[which(M3$DCISpeptides==0)]=NA
+M3$value[which(M3$value>0)]=1
+
+```
+
+```{r}
+tall2=tall[which(tall$coh=="rec"), ]
+tall2$type="IDC"
+tall$type="DCIS"
+
+tallM=rbind(tall, tall2)
+
+tallM$nam2=paste(tallM$Var1, tallM$type)
+
+tallM=tallM[-which(duplicated(tallM)), ]
+
+nidx=paste(M3$Allele, M3$No, M3$case1, sep="")
+idx1=match(nidx, paste(tallM$Var2, tallM$nam2, sep=""))
+subVal=M3$rawDCIS
+subVal[grep("IDC", M3$case1)]=M3$rawIDC[grep("IDC", M3$case1)]
+tallM$count=NA
+tallM$count[na.omit(idx1)]=subVal[-which(is.na(idx1))]
+
+mx4Melt2$Var3=gsub("\\.", ":",mx4Melt2$Var3 )
+nidx=paste(mx4Melt2$L1, mx4Melt2$Var3, sep="")
+idx1=match(nidx, paste(tallM$Var1, tallM$Var2, sep=""))
+
+tallM$count[idx1]=mx4Melt2$x
+tallM$allele=substr(tallM$Var2, 1, 1)
+
+v2ord=c(paste(names(v2), "DCIS"), unique(sort(tallM$nam2[which(tallM$coh=="rec")])))
+tallM$nam2=factor(tallM$nam2, levels=v2ord)
+tallM$val=1
+
+tallM$log=log2(tallM$count+2)
+# perform this as a dummy variable for the color scale
+tallM=rbind( tallM[1, ], tallM)
+tallM$log[1]=0
+
+ggplot(tallM, aes(factor(Var2), (nam2)))+geom_tile(aes(color=log, fill=factor(val),  width=0.6, height=0.6), size=2)+facet_wrap(~allele, drop=T, scales=c("free"))+theme_bw()+scale_color_gradient(low = "white", high = "#08519c", na.value="grey")+scale_fill_manual(values=c("black","white"))+
+  theme(axis.text.x=element_text(angle=90))
+```
+
+We can determine whether there are associations between lymphocyte infiltration and neoantigen load across both cohorts. Remove the IDC samples from this tsudy. 
+
+```{r}
+AbbaLI=AbbaClin[match(names(v2), AbbaClin$SampleID) ,c("SampleID","ImmuneScore", "ITIL")]
+AbbaMut=sapply(AMutall, nrow)
+AbbaMut=AbbaMut[match(names(v2), names(AbbaMut))]
+
+AbbaLI$mut=AbbaMut
+AbbaLI$neo=mx2[match(AbbaLI$SampleID, names(mx2))]
+
+RecMuta=sapply(Mutall2, nrow)
+ImmFrac2=t(SummaryQP)/colSums(SummaryQP)
+
+ColBars=cbind(c( AbbaLI$mut,RecMuta), c( AbbaLI$neo, Sdiff), c( as.numeric(as.character(AbbaLI$ITIL)), ImmFrac2[ ,1]*100))
+ColBars[which(ColBars==0, arr.ind=T)]=4
+colnames(ColBars)=c("MutLoad", "NeoLoad", "TILs")
+
+print('test the association between mutational burden and neoantigen load')
+cor.test(ColBars[ ,"MutLoad"], ColBars[ ,"NeoLoad"])
+
+print('test the association between mutational burden and neoantigen load (remove IDC)')
+cor.test(ColBars[ -grep("IDC", rownames(ColBars)),"TILs"], ColBars[-grep("IDC", rownames(ColBars)) ,"NeoLoad"])
+```
+
+
+```{r}
+ColBars=cbind(c( AbbaLI$mut,RecMuta), c(AbbaLI$neo, Sdiff), c(as.numeric(as.character(AbbaLI$ITIL)), ImmFrac2[ ,1]*100))
+ColBars[which(ColBars==0, arr.ind=T)]=4
+
+rownames(ColBars)=c(rownames(AbbaLI), rownames(ImmFrac2))
+
+heatmap.2(t(log(ColBars)), Colv=NA, trace="none", scale="row", col=brewer.pal(12, "Greens"), na.color = "grey85")
+```
+
+We can also do a quick check to see if there is a drop in neoantihen load between DCIS and IDC? 
+Doing a paired t.test between the cases shows there isn't a significant difference, even though it looks like higher proportion are predicted to be neoantigens in the IDC case.
+
+```{r}
+Nidx=4 
+PcBinder=rbind(Mnew[1, ]/MutTableR[Nidx, ])
+
+Qvals=matrix(NA, ncol=12, nrow=2)
+# Do some bootstrapping here? or randomly sample from pool and see if they are predicted to be neoantigens?
+for (i in 1:12){
+f2=sapply(1:1000, function(x) sample(c(1:MutTableR[Nidx, i]), MutTableR[Nidx, i], replace=T))
+f3=sapply(1:1000, function(x) length(which(f2[ ,x]<=Mnew[1,i])))
+f4=quantile(f3, c(0.025, 0.975))
+Qvals[ ,i]=f4
+}
+
+Qvals2=t(Qvals)/MutTableR[Nidx, ]
+
+barCentres<-barplot(PcBinder*100, ylab = "Percentage mutations predicted as neoantigens", las=2, ylim=c(0, 100))
+segments(barCentres, Qvals2[,1  ]*100, barCentres,Qvals2[,2 ]*100)
+
+# rank sum test
+wilcox.test(PcBinder[seq(1, 12, by=2)],PcBinder[seq(2, 12, by=2)], paired = T)
+```
+
+
+## RNA expression of predicted neoantigens
+
+Below is a heatmap of expressed mutations in the recurrence cohort: Samples are color coded according to the allele frequency (of variant vs total). Grey samples indicate a predicted neoantigen but either not detected in RNA or we do not have RNA data available.
+Both the DNA VAF as well as the RNA VAF is presented to see if there are similarities or differences - for example, PTEN has a high mutation frequency in DNA but not highly expressed in RNA. The opposite is observed for CASK for example.
+
+```{r}
+#rnadf2mut=rnadf[which(rnadf$Mut>=2), ]
+
+# X1=acast(rnadf2mut[ ,c("samp", "Gene", "Prob")], samp~Gene)
+# X2=acast(rnadf2mut[ ,c("samp", "Gene", "rna_freq")], samp~Gene)
+NeoListExprMelt=melt(NeoListExprMod, measure.vars="RefBase")
+NeoListExprMeltTemp=NeoListExprMelt[which(!is.na(NeoListExprMelt$Gene)), ]
+NeoListExprMeltTemp$RNAEBProb[which(NeoListExprMeltTemp$Alt<2)]=(-0.1)
+Tabgenes=unique(NeoListExprMeltTemp$Gene[which(NeoListExprMeltTemp$RNAEBProb>0)])
+Gsearch=unique(c(as.character(Tabgenes), as.character(OncoList$Gene.Symbol), breastGeneList))
+## also add genes in the other sets which are detected but not expressed
+meltNeo=lapply(Mutall2, function(x) x[which(!is.na(x$NeoPeptide)), ])
+meltNeo2=melt(meltNeo, measure.vars=c("NeoRank"))
+meltNeo2=meltNeo2[-which(paste(meltNeo2$Hugo_Symbol, meltNeo2$L1) %in%paste(NeoListExprMeltTemp$Gene, NeoListExprMeltTemp$L1)), ]
+meltNeo3=meltNeo2[ which(meltNeo2$Hugo_Symbol%in%Gsearch) , c("L1", "Hugo_Symbol")]
+meltNeo3$DNAEBProb=(-0.1)
+meltNeo3$RNAEBProb=(-0.1)
+meltNeo3$Gene=meltNeo3$Hugo_Symbol
+
+AllDt=rbind(NeoListExprMeltTemp[ which(NeoListExprMeltTemp$Gene%in%Gsearch),c("L1", "Gene", "DNAEBProb", "RNAEBProb")],meltNeo3[ ,c("L1", "Gene", "DNAEBProb", "RNAEBProb")] )
+
+X1=acast(AllDt[ ,c("L1", "Gene", "DNAEBProb")], L1~Gene, fun.aggregate = mean)
+X2=acast(AllDt[ ,c("L1", "Gene", "RNAEBProb")], L1~Gene,fun.aggregate = mean)
+
+X1orders=order(X1[9, ], X1[8, ],  X1[10, ], X1[3, ], X1[2, ], X1[5, ])
+X1=X1[ ,X1orders]
+X2=X2[, X1orders]
+
+image(t(X1), col=brewer.pal(9, "Blues"), xaxt="n", yaxt="n", main="DNA VAF")
+axis(2, at=seq(0, 1, length=nrow(X1)), rownames(X1), las=2,  cex.axis=0.7)
+axis(1, at=seq(0, 1, length=ncol(X1)),colnames(X1) , las=2, cex.axis=0.7)
+
+image(t(X2), col=c("grey", brewer.pal(9, "Blues")), xaxt="n", yaxt="n", main="RNA VAF")
+axis(2, at=seq(0, 1, length=nrow(X2)), rownames(X2), las=2,  cex.axis=0.7)
+axis(1, at=seq(0, 1, length=ncol(X2)),colnames(X2) , las=2, cex.axis=0.7)
+
+recNeo=t(X2)
+```
+
+And similarly in the Abba cohort is displayed as a heatmap summarising all mutations and those which are predicted to be neoantigens. The color coding is:
+
+- predicted neoantigens supported by RNA (light green)
+- hotspot mutations with are neoantihens supported by RNA (dark green)
+- coding mutations (yellow)
+- predicted neoantigens but not supported by RNA (blue) 
+
+```{r, fig.height=7}
+## need to modify this list to only have neoantigens
+## MAKE PLOT WHICH HAS:
+# - predicted neoantigens (blue)
+# - hotspot mutations with are neoantihgens (green)
+# - pathologic mutations (yellow)
+# - rsSNP mutations (red) 
+ AB=unlist(sapply(MHCAbba, function(x) unique(x$geneID)))
+ ABx=unlist(sapply(MHCAbba, function(x) length(unique(x$geneID))))
+ AB2=sapply(strsplit(as.character(AB), "_"), function(x) x[1])
+ Nidx=cbind(mut=AB2, samp=rep(names(ABx), times=ABx))
+ 
+Nexpr2=lapply(NeoListExprModAbba, function(x) x[which(x$Alt>=2), c("Gene", "dbSNP")])
+meltNexpr2=melt(Nexpr2)
+commonMut=unique(c(names(which(rowSums(sign(data.matrix(N2[ ,-1])))>1)), as.character(meltNexpr2$Gene)))
+
+xa=table(factor(meltNexpr2[ ,1], levels=commonMut), meltNexpr2[ ,3])
+meltNexpr2$db2=ifelse(meltNexpr2$dbSNP=="", 0, 1)
+xc=data.matrix(N2[match(rownames(xa), rownames(N2)), -1])
+xcRS=xc
+xcRS[which(xcRS<6, arr.ind = T)]=0
+xc[which(xc>5, arr.ind=T)]=0
+xc2=xc[ ,match(colnames(xa), colnames(xc))]
+xc3=xc[ ,-match(colnames(xa), colnames(xc))]
+xc2RS=xcRS[ ,match(colnames(xa), colnames(xc))]
+xc3RS=xcRS[ ,-match(colnames(xa), colnames(xc))]
+
+xd=4*sign(xa)+2*sign(xc2RS)+sign(xc2)
+xdb=2*sign(xc3RS)+sign(xc3)
+xd=cbind(xd, xdb)
+
+NeoTab2=table(factor(Nidx[ ,1], levels=commonMut), factor(Nidx[ ,2], levels=colnames(xd)))
+lx1=which(NeoTab2>0 & xd<5, arr.ind=T)
+
+xd[which(xd==2, arr.ind=T)]=1
+
+xd[which(NeoTab2>0 & xd<5, arr.ind=T)]=3
+
+AbbaNeoMutSum=xd
+
+# also check how many of these are oncogenes
+RS=rowSums(sign(xd))
+xe=xd[which(RS>1),]
+l1=order(rowSums(sign(xe)), decreasing =T)
+xe=xe[l1, ]
+mx1=rownames(xe)%in%OncoList$Gene.Symbol
+mx1=ifelse(mx1==FALSE, "white", "black")
+mx2=rownames(xe)%in%c(toupper(ImmGenes$Gene.Symbol), ImmGenes2$Symbol)
+mx2=ifelse(mx2==FALSE, "white", "blue")
+mx1[which(mx2=="blue" & mx1=="white")]="blue"
+
+# check the labels: immune infiltration based on the patholgoist scoring
+InfLvl=AbbaClin$ITIL[match(colnames(xe), AbbaClin$SampleID)]
+InfLvl[InfLvl=="-"]=NA
+InfLvl=as.numeric(InfLvl)
+RowCols2=factor(InfLvl)
+RowCols2=brewer.pal(8, "Greens")[as.numeric(RowCols2)]
+
+heatmap.2(t(xe[ ,order(InfLvl) ]), scale="none", Colv = NA, Rowv=NA, trace="none", col=c( "white","#fed976","#fed976","#1f78b4","white", "white", "#addd8e", "#31a354"), RowSideColors = RowCols2[order(InfLvl)], sepcolor='black',colsep=c(1:nrow(xd)), rowsep = c(1:ncol(xd)), sepwidth=c(0.005, 0.005))
+```
+
+Save the output to file
+
+```{r}
+GetDataColNames=c(1:2, 5:7, 9:12, 14,  85, 89, 107, 171, 503:507)
+AllMutData=lapply(Mutall2, function(x) x[ ,GetDataColNames])
+AllMutDataMelt=melt(AllMutData, measure.vars=c("Entrez_Gene_Id"))
+
+AllMutDataMelt=AllMutDataMelt[ ,-match("variable", colnames(AllMutDataMelt))]
+colnames(AllMutDataMelt)[grep("value", colnames(AllMutDataMelt))]="Entrez_Gene_Id"
+colnames(AllMutDataMelt)[grep("L1", colnames(AllMutDataMelt))]="Sample"
+
+#
+m1=paste(AllMutDataMelt$Sample, AllMutDataMelt$Hugo_Symbol, AllMutDataMelt$Start_position)
+m2=paste(NeoListExprMelt$L1, NeoListExprMelt$Gene, NeoListExprMelt$Start.bp)
+midx=match(m2, m1)
+
+AllMutDataMelt$RNA_ref_count=NA
+AllMutDataMelt$RNA_ref_count[midx]=NeoListExprMelt$Ref
+AllMutDataMelt$RNA_alt_count=NA
+AllMutDataMelt$RNA_alt_count[midx]=NeoListExprMelt$Alt
+
+write.table(AllMutDataMelt, file=sprintf("rslt/Recurrence_Mutations_Neoantigen_Annotated_%s.txt", Sys.Date()), sep="\t", row.names = F, quote=F)
+```
+
+

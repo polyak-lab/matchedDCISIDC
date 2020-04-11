@@ -1,0 +1,639 @@
+# cycIF data
+
+In this section, we look at the populations observed using cycIF. 
+The first steps involve: 
+
+* Updating the X and Y co-ordinates such that a whole slide image can be observed
+* Determine the scanning window during cycIF: this is required to perform a background correction
+* Collapse the scanning window together to infer what the background is like. Use this value to perform a background correction.
+* Running Rphenograph on resulting data. Based on expression data and spatial localisation, determine the cell types (ie. RBC, stromal, immune, epithelial)
+* Re-run R phenograph using a subset of cells and markers of interest (e.g. immune only based on CD45+)
+* Assign classification names by manual inspection
+* If one specific cluster contains two different cell types of interest, refine using GMM
+* If tissue loss is observed, segment out the regions of interest.
+
+Below is the code used to preprocess the data following cell segmentation and feature extraction:
+
+```{r, eval=F}
+NP9_DCIS=read.delim("data/cyclicIF/NP9-DCIS2_forCluster_XYLoc_updated_2.txt", sep=" ")
+NP9_IDC=read.delim("data/cyclicIF/NP9-IDC2_forCluster_XYLoc_updated_2.txt", sep=" ")
+
+NP9_DCIS$scene=substr(NP9_DCIS$UNIQID, 11, 18)
+NP9_IDC$scene=substr(NP9_IDC$UNIQID, 10,17)
+
+## sort the dimensions: merge scene 002 and 003 together in the DCIS, in the IDC leave as is.
+
+dcisScene=as.numeric(substr(NP9_DCIS$scene, 6, 9))
+
+addSumX=c(0,0,10000)
+NP9_DCIS$XLocN=NP9_DCIS$XLoc+addSumX[dcisScene]
+NP9_DCIS$YLocN[which(NP9_DCIS$scene!="scene001")]=round(max(NP9_DCIS$YLoc[which(NP9_DCIS$scene!="scene001")]))-NP9_DCIS$YLoc[which(NP9_DCIS$scene!="scene001")]
+NP9_DCIS$YLocN[which(NP9_DCIS$scene=="scene001")]=round(max(NP9_DCIS$YLoc[which(NP9_DCIS$scene=="scene001")]))-NP9_DCIS$YLoc[which(NP9_DCIS$scene=="scene001")]
+
+NP9_IDC$XLocN=NP9_IDC$XLoc
+idcScene=as.numeric(substr(NP9_IDC$scene, 6, 9))
+# rotate the image with Y axis:
+mVals=ceiling(stack(by(NP9_IDC$YLoc,NP9_IDC$scene,  max))[ ,1])
+NP9_IDC$YLocN=mVals[idcScene]-NP9_IDC$YLoc
+
+## do a scaling asinh transformation:
+
+all9=rbind(cbind(NP9_DCIS, type="DCIS"), cbind(NP9_IDC, type="IDC"))
+all9sinh=asinh(data.matrix(all9[, 2:42]))
+
+
+##2. Do background correction: see R script below to do this
+source("R/correct_cyclic_IF_intensity_patterns.R")
+
+## Run R phenograph (on cluster)
+## Step 1. firstly, run using all markers to get an idea of the distribution:
+Case9 <- Rphenograph(all9meta, k = 80)
+Case9class=membership(Case9[[2]])
+
+## Step 2. Following classification of the clusters, mark which are stromal/immune and which are Epithelial and re=run
+
+mx1=which(all9meta$type=="DCIS")
+mx2=which(all9meta$type=="IDC")
+
+# rescale according to the 5th and 95th percentiles and squash the values into a range of 0:1
+MedScale=function(data){
+   xmin=apply(data, 2, function(x) quantile(x, 0.025, na.rm=T))
+   xmax=apply(data, 2, function(x) quantile(x, 0.975, na.rm=T))
+   temp=sapply(1:ncol(data), function(x) (data[ ,x]-xmin[x])/xmax[x], simplify=T)
+  # temp[temp>1.5]=1.5
+   rownames(temp)=rownames(data)
+   colnames(temp)=colnames(data)
+   temp
+}
+
+doThis=which(Case9class%in%rerunImm) 
+dataNew=rbind(MedScale(all9sinh[ intersect(mx1, doThis), ]), MedScale(all9sinh[intersect(mx2, doThis), ]))
+Case9 <- Rphenograph(dataNew[,ImmuneMarkers], k = 80)
+Case9backImmScale=membership(Case9[[2]])
+
+## Step3. Repeat the above with the luminal cells
+
+## Step4. If certain stains do not give a clean result, use a gmmodel using those markers
+## If a GMM is required to identify a specific cluster of interest
+library(mclust)
+library(mixtools)
+mx1=which(all9meta$rerunImm==5) 
+testCutcd4=Mclust(all9sinh[ mx1,c("FoxP3_Nuclei")], G=2)# this seems to work ok
+
+mx2=which(all9meta$rerunImm==18) 
+testCutcd4b=Mclust(all9sinh[ mx2,c("CD4_Ring")], G=2)# this seems to work ok
+boxplot(all9sinh[ mx2,"CD4_Ring"]~testCutcd4b$classification)
+
+mx3=which(all9meta$rerunImm==13) 
+testCutcd4c=Mclust(all9sinh[ mx3,c("CD4_Ring")], G=2)# this seems to work ok
+boxplot(all9sinh[ mx3,"CD4_Ring"]~testCutcd4c$classification)
+
+### 5. If tissue loss is observed, segment out the regions of interest that we wish to keep.
+
+NROI=1
+
+lx2=which(all9$type=="IDC" & all9$scene=="scene002" )
+X11()
+plot(all9$XLocN[lx2],all9$YLocN[lx2], col="grey90", main='dcis', pch='.')#, xlim=c(7000, 12000), ylim=c(10000, 15000))
+
+IDC92_sc2=fhs(all9[lx2 ,5:6])
+
+## check if this works, otherwise may manually need to input this data
+ROIlist=list()
+for (i in 1:NROI){
+ROIlist[[i]]<- fhs(all9[lx2 ,5:6])
+}
+
+IDC9_scene003Labs=lapply(ROIlist, function(x) all9[match(x, rownames(all9)), ])
+IDC9_scene002Labs=all9[match(IDC92_sc2, rownames(all9)), ]
+
+```
+
+## Case 9
+
+We will look at this example first, and run code on 9IDC directly due to shorter computation time. Case 9 is an ER+ which has low immune infiltrate, and recurs after 10 years.
+
+```{r}
+load("data/RecurrenceCohort/cycIF//FInal_case9_subIDC.RData")
+
+pal1=brewer.pal(9, "Set3")
+cols_d4 <- darken(pal1, 0.5)
+
+pal2sub=rbind(pal1, cols_d4)
+pal2sub=as.vector(pal2sub)
+RdBu=brewer.pal(11,"RdBu")
+palcols=cols_d4[c(4, 3:2, 5)]
+
+immuneMarkers=c(2,  3 , 8 ,10, 11 ,13, 19 ,24, 28, 30, 34,36)
+luminalMarkers=c(4:7, 9, 12:14, 16:20,22, 25, 29,32:33, 40)
+
+immlabels=c("CD20", "CD4", "CD8", "Foxp3","Macrophage")
+stromaLabels=c("CD31", "stroma", "Vim+stroma")
+lumLab2=c("EcadHiCKHi" ,  "EcadloCKhigh"  ,   "EcadloCKlo" ,  "CK8+"   ,  "ERPgRhigh"   ,      "Ki67+epi"  ,    "myeop" ,     "Normal")
+
+all9meta$loc=paste(all9meta$type, all9meta$scene)
+```
+
+### Summary of the image 
+
+Here, we show the epithelial cells which have been clustered using phenograph. Each color is a specific cluster. The sizes of the sections are approximately indicates by the x and y axes, where 1000 px is approximately representative of 300um. 
+
+```{r, cache=T, fig.height=8}
+P1=brewer.pal(12, "Set3")
+palette(P1)
+
+par(mfrow=c(1,2))
+memVals=all9meta$class
+
+searchType=lumLab2
+
+## example whole slide section
+## IDC
+lx1=which(all9meta$type=="IDC" & memVals%in%searchType & all9meta$scene=="scene003" )
+lx2=which(all9meta$type=="IDC" & all9meta$scene=="scene003" )
+plot(all9meta$XLocN[lx2],max(all9meta$YLocN)-all9meta$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="9IDC") 
+ #    xlim=c(9000, 10000), ylim=c(11100, 13000))
+points(all9meta$XLocN[lx1],max(all9meta$YLocN)-all9meta$YLocN[lx1], col=factor(memVals[lx1], levels=searchType), main='9 IDC Ep', pch=20, cex=0.4)
+
+## example subsection in case8
+## DCIS
+lx1=which(all9meta$type=="DCIS" & memVals%in%searchType & all9meta$scene!="scene001")
+lx2=which(all9meta$type=="DCIS" & all9meta$scene!="scene001")
+plot(max(all9meta$YLocN)-all9meta$YLocN[lx2], all9meta$XLocN[lx2],col="grey90", pch='.',  xlab="", ylab = "", main="9DCIS")
+     #xlim=c(6000,8100), ylim=c(12800, 14300) )
+points(max(all9meta$YLocN)-all9meta$YLocN[lx1], all9meta$XLocN[lx1],col=factor(memVals[lx1], levels=searchType), main='9 DCIS Ep',  pch=20,  cex=0.4)
+```
+
+Similarly, below is the immune map for these cases. Note that the DCIS may appear to have more immune cells because we have zoomed into the 9IDC sample. A dominant popilation in both is the macrophage shown in blue.
+
+```{r, fig.height=8}
+searchType=immlabels
+
+par(mfrow=c(1,2))
+## IDC
+lx1=which(all9meta$type=="IDC" & memVals%in%searchType & all9meta$scene=="scene003")
+lx2=which(all9meta$type=="IDC" & all9meta$scene=="scene003" )
+plot(all9meta$XLocN[lx2], max(all9meta$YLocN)-all9meta$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="9IDC immune")
+points(all9meta$XLocN[lx1], max(all9meta$YLocN)-all9meta$YLocN[lx1], col=factor(memVals[lx1], levels=searchType), main='DCIS', pch=20, cex=0.4)
+
+## example subsection in case8
+## DCIS
+lx1=which(all9meta$type=="DCIS" & memVals%in%searchType & all9meta$scene!="scene001")
+
+lx2=which(all9meta$type=="DCIS" & all9meta$scene!="scene001")
+plot(max(all9meta$YLocN)-all9meta$YLocN[lx2], all9meta$XLocN[lx2],col="grey90", pch='.',  xlab="", ylab = "", main="9DCIS immune")
+points(max(all9meta$YLocN)-all9meta$YLocN[lx1],all9meta$XLocN[lx1], col=factor(memVals[lx1], levels=searchType), main='DCIS',  pch=20,  cex=0.4)
+```
+
+
+### Cellular composition
+
+We can summarise the cellular composition of the above images below. Firstly, a quick overview of stroma, tumor and immune composition in dcis vs idc. 
+
+```{r}
+lx1=table(all9meta$loc[all9meta$class%in%immlabels])
+lx2=table(all9meta$loc[all9meta$class%in%stromaLabels])
+lx3=table(all9meta$loc[all9meta$class%in%lumLab2])
+LXAll=rbind(imm=lx1, str=lx2, ep=lx3)
+Summ1=cbind(rowSums(LXAll[ ,2:3]), LXAll[ ,6])
+Summ1=t(Summ1)/colSums(Summ1)
+barplot(t(Summ1), col=c("#fdb462", "#984ea3","#8dd3c7"), names.arg=c("DCIS", "IDC"), horiz = T)
+legend("topleft", c("immune", "stroma", "tumor"), col=c("#fdb462", "#984ea3","#8dd3c7"), pch=19)
+```
+
+The proportion of the different cell types are shown below, separated into an "immune population", an "epithelial/tumor" population and "stromal" population. In the lighter color is the DCIS, and in the darker colors are the IDC samples, and the colors correspond to that used in the previously displayed maps 
+
+This analysis shows that across the immune cells, the CD20 population increased in the IDC compared to DCIS (it seems to feature a tertiary lymphoid structure). In the epithelial/tumor cells, the PgR+ poulation increases in the IDC. 
+
+```{r, fig.height=9}
+lx1=table(all9meta$class, all9meta$loc)
+lxLum=lx1[rownames(lx1)%in%lumLab2,]
+lxLum=cbind(rowSums(lxLum[ ,2:3]), lxLum[ ,6])
+lxLumFrac=t(lxLum)/colSums(lxLum)
+# 
+lxImm=lx1[rownames(lx1)%in%immlabels, ]
+lxImm=cbind(rowSums(lxImm[ ,2:3]), lxImm[ ,6])
+lxImmFrac=t(lxImm)/colSums(lxImm)
+# 
+lxStr=lx1[rownames(lx1)%in%stromaLabels,]
+lxStr=cbind(rowSums(lxStr[ ,2:3]), lxStr[ ,6])
+lxStrFrac=t(lxStr)/colSums(lxStr)
+
+par(mfrow=c(2,2))
+
+barplot(lxImmFrac, beside=T, xlab = "proportion of Immune cells", col=pal2sub, horiz = T, las=2, main="Immune")
+ 
+barplot(lxLumFrac[ ,lumLab2], beside=T, xlab = "proportion of Luminal cells", col=pal2sub, horiz = T, las=2, main="Epi")
+ 
+barplot(lxStrFrac, beside=T, col=pal2sub, xlab = "proportion of stromal cells", horiz=T, las=2, main="Stroma")
+
+```
+
+
+### Expression summary
+
+Here, we make a heatmap for the different clusters shown above based on luminal vs stromal markers. For each class, we sample 100 cells with replacement. The generated geatmaps will provide an idea of the markers which are expressed in the different cell types. Note that both immune and epithelial cells are featured in the maps to highlight the differences. The first 8 samples are epithelial related (lighter colors), and the final 5 are immune related (darker colors).
+
+
+```{r, fig.height=7}
+xa=c(lumLab2, immlabels)
+
+CellList=sapply(xa, function(x) sample(which(all9meta$class==x), 100))
+
+cellAll=as.vector(CellList)
+rowsideC=rep(c(pal1[1:length(lumLab2)], cols_d4[1:length(immlabels)]), each=100)
+
+heatmap.2(all9sinh[cellAll  ,luminalMarkers], col=RdBu[11:1],  scale="col", trace="none", RowSideColors = rowsideC, Rowv = NA, main="epithelial markers")
+
+
+heatmap.2(all9sinh[cellAll  ,immuneMarkers], col=RdBu[11:1],  scale="col", trace="none", RowSideColors = rowsideC, Rowv = NA, main="immune markers")
+
+```
+
+### Spatial statistics:
+
+In this analysis, we can consider the same metrics applied in the analysis of H\&E slides:
+
+* the interacting fraction
+* the nearest neighbour distances
+* the morisita-horn distance
+
+#### The interacting fraction
+
+Below, these are calculated for Case 9 IDC. Firsly, consider the interacting fraction, i.e. the proportion of immune cells which are within 10um of a tumor cell:
+
+```{r}
+refineArea=which(all9meta$type=="IDC" & all9meta$scene=="scene003")
+
+## do a distance measurement between Tregs and luminal cells
+msearch2=intersect(refineArea, which( memVals%in%lumLab2))
+msearchB=intersect(refineArea, which( memVals=="CD4"))
+msearchC=intersect(refineArea, which(  memVals=="CD8"))
+msearchD=intersect(refineArea, which(  memVals=="Foxp3"))
+msearchE=intersect(refineArea, which(  memVals=="Macrophage"))
+
+windowOut=ripras(all9meta$XLocN[refineArea], all9meta$YLocN[refineArea])
+
+newdfR=rbind(data.frame(all9meta[ msearch2,c("XLocN", "YLocN")], type="luminal"), 
+            data.frame(all9meta[ msearchD,c("XLocN", "YLocN")], type="Treg"),
+            data.frame(all9meta[ msearchC,c("XLocN", "YLocN")], type="CD8"),
+            data.frame(all9meta[ msearchB,c("XLocN", "YLocN")], type="CD4"),
+            data.frame(all9meta[ msearchE,c("XLocN", "YLocN")], type="Mac"))
+
+xlimV=c(min(all9meta$XLocN[refineArea]), max(all9meta$XLocN[refineArea]))
+ylimV=c(min(all9meta$YLocN[refineArea]), max(all9meta$YLocN[refineArea]))
+
+ppOutR=ppp(newdfR$XLocN, newdfR$YLocN, marks=newdfR$type, poly=windowOut$bdry)
+
+############
+## method 1: calculate the nearest neighbour distance between immune and luminal, and compute the % which lie within 50pixels
+############
+
+Ndist=30
+d1=nndist(ppOutR, by=marks(ppOutR))
+lx1a=which(ppOutR$marks=="Treg"& d1[ ,1]<Ndist)
+lx1b=which(ppOutR$marks=="CD8"& d1[ ,1]<Ndist)
+lx1c=which(ppOutR$marks=="CD4"& d1[ ,1]<Ndist)
+lx1d=which(ppOutR$marks=="Mac"& d1[ ,1]<Ndist)
+lx2a=which(ppOutR$marks=="luminal"& d1[ ,2]<Ndist)
+lx2b=which(ppOutR$marks=="luminal"& d1[ ,3]<Ndist)
+lx2c=which(ppOutR$marks=="luminal"& d1[ ,4]<Ndist)
+
+tcelldist=c(length(lx1a), length(lx1b),length(lx1c), length(lx1d))
+amx1=table(newdfR$type)
+Fracfound=tcelldist/amx1[-1]
+
+barplot(tcelldist*100/amx1[-1], ylab="Percentage ''interacting'' with luminal", col=palcols)
+```
+
+As there are multiple immune populations here, we can determine whether a particular cell type is closer compared to that by chance. To do this, we permute the immuen cell labels 1000 times and compute a z-score and p-value for the observed value:
+
+```{r}
+#########
+## Figure out significance by permuting the immune labels
+#########
+
+searchSet=intersect(refineArea, which( memVals%in%immlabels))
+SumTab=table(memVals[refineArea])
+
+DistMat=matrix(NA, nrow=1000, ncol=4)
+
+for (i in 1:1000){
+SampleSetcd4=sample( searchSet, SumTab[c("CD4")])
+SampleSetcd8=sample(setdiff(searchSet, SampleSetcd4), SumTab["CD8"])
+SampleSetFox=sample(setdiff(searchSet, c(SampleSetcd4, SampleSetcd8)), SumTab["Foxp3"])
+SampleSetMac=sample(setdiff(searchSet, c(SampleSetcd4, SampleSetcd8, SampleSetFox)), SumTab["Macrophage"])
+
+newdf=rbind(data.frame(all9meta[ msearch2, c("XLocN", "YLocN")], type="luminal"), 
+            data.frame(all9meta[SampleSetFox,c("XLocN", "YLocN")], type="Treg"),
+            data.frame(all9meta[ SampleSetcd8,c("XLocN", "YLocN")], type="CD8"),
+            data.frame(all9meta[ SampleSetcd4,c("XLocN", "YLocN")], type="CD4"),
+            data.frame(all9meta[ SampleSetMac,c("XLocN", "YLocN")], type="Mac"))
+
+ppOut=ppp(newdf$XLocN, newdf$YLocN, marks=newdf$type, poly=windowOut$bdry)
+
+d1=nndist(ppOut, by=marks(ppOut))
+lx1a=which(ppOut$marks=="Treg"& d1[ ,1]<Ndist)
+lx1b=which(ppOut$marks=="CD8"& d1[ ,1]<Ndist)
+lx1c=which(ppOut$marks=="CD4"& d1[ ,1]<Ndist)
+lx1d=which(ppOut$marks=="Mac"& d1[ ,1]<Ndist)
+lx2a=which(ppOut$marks=="luminal"& d1[ ,2]<Ndist)
+lx2b=which(ppOut$marks=="luminal"& d1[ ,3]<Ndist)
+lx2c=which(ppOut$marks=="luminal"& d1[ ,4]<Ndist)
+
+tdist=c(length(lx1a), length(lx1b),length(lx1c), length(lx1d))
+amx1=table(newdf$type)
+DistMat[i, ]=tdist/amx1[-1]
+}
+
+colnames(DistMat)=c("Treg", "CD8", "CD4", "Mac")
+
+Rx1=rbind(DistMat, Fracfound)
+Rx2=scale(Rx1)
+## calculate a p value:
+pvals=2*pnorm(-abs(Rx2[1001, ]))
+
+px1=melt(Rx2[-1001, ])
+px2=melt(Rx2[1001,])
+px2$Var2=rownames(px2)
+
+```
+
+Here, it seems that the macrophages may be closer compared to what is expected if there is a random distribution. 
+
+```{r}
+ggplot(px1, aes(x=Var2, y=value, fill=Var2, col=Var2)) + geom_violin()+
+  stat_summary(geom="point", shape=23, color="black", size=2)+
+  annotate("text", label = round(pvals*100)/100, size = 3, x = px2$Var2, y = 4)+
+  stat_summary(data=px2, geom="point", shape=5, col="red", size=2)+labs(y="z-score", x="cell type")+ 
+  ggtitle("9IDC")+  theme_bw()+theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  scale_fill_manual(values=palcols)+scale_color_manual(values=palcols)
+```
+
+#### knn distance analysis
+
+If we extend this distance, we can observe what the CDF of immune to epithelial interaction looks like. We can do this by plotting the k-nearest neighbour distances where k=1,3,5. It appears that the Tregs are very close to the tumor compared to the other cell types of interest, but may not have been significant in the above analysis due to the small number of cells. Macrophages also appear to be close at short distances, but crosses the CD4 graph at larger distances.
+
+```{r, cache=T, eval=T}
+
+gridsize=250
+
+ppInd=which(ppOutR$x>(xlimV[1]+gridsize) & ppOutR$x<(xlimV[2]-gridsize) & ppOutR$y>(ylimV[1]+gridsize) & 
+              ppOutR$y<(ylimV[2]-gridsize))
+
+d2=nndist(ppOutR, by=marks(ppOutR), k=c(1:5))
+
+Dist1=d2[ ,grep("dist.1", colnames(d2))]
+knn3=sapply(names(amx1), function(x) rowMeans(d2[ ,grep(x, colnames(d2))[1:3]]))
+knn5=sapply(names(amx1), function(x) rowMeans(d2[ ,grep(x, colnames(d2))]))
+knnDistMatrix=abind(Dist1, knn3, knn5, along=3)
+Ctypes=levels(ppOutR$marks)[-1]
+
+#pdf(sprintf("~/Desktop/%s_knn_dist.pdf", sampid), width=9, height=5)
+par(mfrow=c(1, 3))
+for (i in 1:3){
+  ptest=matrix(NA, nrow=4, ncol=4)
+  namtest=matrix(NA, nrow=4, ncol=4)
+  for (j in 1:(length(Ctypes)-1)){
+    for (k in (j+1):length(Ctypes)){
+    ptest[j,k]=ks.test(knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i], 
+               knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
+    namtest[j,k]=paste(Ctypes[j], Ctypes[k])
+    }}
+  
+  pvals=ptest[upper.tri(ptest)]
+  names(pvals)=namtest[upper.tri(ptest)]
+  
+plot(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="Treg"),1, i]), lwd=2, main=sprintf("k=%s", i*2-1 ), 
+     xlim=c(0,500), col=palcols[1])
+lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="CD8"),1, i]), lwd=2, col=palcols[2])
+lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="CD4"),1, i]), lwd=2, col=palcols[3])
+lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="Mac"),1, i]), lwd=2, col=palcols[4])
+legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
+}
+#dev.off()
+
+```
+
+Compare this to the 9DCIS case (pre-ran these solutions). Below are the interacting fractions and the computed z-scores. The CD8 cells appear to be closer compare to the other cell types when looking at the interacting fraction, the z-scores and the knnDistances.
+
+```{r}
+load("data/RecurrenceCohort/cycIF/9dcis_spatial.Rdata")
+dcis9mh=dfall3
+refineArea=which(all9meta$type=="DCIS" & all9meta$scene!="scene001")
+Fracfound=InteractingFraction(memVals, refineArea, all9meta, labs=c("CD4", "CD8", "Foxp3", "Macrophage"), N=30)
+
+barplot(Fracfound$Fracfound, ylab="Percentage ''interacting'' with luminal", col=pal1[c(4, 3,2, 5)])
+PlotInteractingZscore(Fracfound$Fracfound, DistMat, "9DCIS", cols=pal1[c(4, 3,2, 5)])
+```
+
+knnDistances:
+
+```{r}
+refineArea=which(all9meta$type=="DCIS" & all9meta$scene!="scene001")
+
+Ctypes=levels(Fracfound$ppOut$marks)[-1]
+ppOutR=Fracfound$ppOut
+xlimV=c(min(all9meta$XLocN[refineArea]), max(all9meta$XLocN[refineArea]))
+ylimV=c(min(all9meta$YLocN[refineArea]), max(all9meta$YLocN[refineArea]))
+
+gridsize=250
+ppInd=which(ppOutR$x>(xlimV[1]+gridsize) & ppOutR$x<(xlimV[2]-gridsize) & ppOutR$y>(ylimV[1]+gridsize) & 
+              ppOutR$y<(ylimV[2]-gridsize))
+
+ppOutR
+length(ppInd)
+
+par(mfrow=c(1, 3))
+for (i in 1:3){
+  ptest=matrix(NA, nrow=4, ncol=4)
+  namtest=matrix(NA, nrow=4, ncol=4)
+  for (j in 1:(length(Ctypes)-1)){
+    for (k in (j+1):length(Ctypes)){
+    ptest[j,k]=ks.test(knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i],
+               knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
+    namtest[j,k]=paste(Ctypes[j], Ctypes[k])
+    }}
+
+  pvals=ptest[upper.tri(ptest)]
+  names(pvals)=namtest[upper.tri(ptest)]
+
+plot(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="Treg"),1, i]), lwd=2, main=sprintf("k=%s", i*2-1 ),
+     xlim=c(0,500), col=palcols[1])
+lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="CD8"),1, i]), lwd=2, col=palcols[2])
+lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="CD4"),1, i]), lwd=2, col=palcols[3])
+lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="Mac"),1, i]), lwd=2, col=palcols[4])
+legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
+}
+```
+
+
+#### Morisita-Horn index for mixing
+
+Finally, we can assess mixing between the different immune populations and the tumor using this index. We look at the following steps:
+
+* check for stability by increasing the grid size gradually and check if the relative differences stay the same
+* Select a grid size of interest (300, approx 100um) and shift the boundaries to check the variability in these values
+* Perform the analysis excluding particular squares of interest: can we remove tumor-only grids to take into account differences in tissue architecture? What if we did the same thing with the immune cells? Or consider only squares that contain both immune and tumor cells? 
+
+```{r}
+
+################################
+## method 2: M-H mixing index?
+################################
+
+## more mixing with Treg and CD4 cells?
+gridsize=seq(100, 1000, by=100)
+refineArea=which(all9meta$type=="IDC" & all9meta$scene=="scene003")
+xlimV=c(min(all9meta$XLocN[refineArea]), max(all9meta$XLocN[refineArea]))
+ylimV=c(min(all9meta$YLocN[refineArea]), max(all9meta$YLocN[refineArea]))
+MHsumm=matrix(NA, nrow=length(gridsize), ncol=3*10)
+
+for (i in 1:length(gridsize)){
+        
+xcut=seq(xlimV[1], xlimV[2], length=round(diff(xlimV)/gridsize[i])+1)
+ycut=seq(ylimV[1], ylimV[2], length=round(diff(ylimV)/gridsize[i])+1)
+ppTess=tess(ppOut, xgrid=xcut, ygrid=ycut)
+
+nt=quadratcount(ppOut[ppOut$marks=="luminal"], tess=ppTess)
+ni=quadratcount(ppOut[ppOut$marks=="Treg"], tess=ppTess)
+na=quadratcount(ppOut[ppOut$marks=="CD8"], tess=ppTess)
+ns=quadratcount(ppOut[ppOut$marks=="CD4"], tess=ppTess)
+nm=quadratcount(ppOut[ppOut$marks=="Mac"], tess=ppTess)
+
+allDat=data.frame(Tumor=as.vector(nt), Treg=as.vector(ni), CD8=as.vector(na), CD4=as.vector(ns), Mac=as.vector(nm))
+xres<-mh(allDat, resample=500)
+
+MHsumm[i, ]=c(xres$Mean[lower.tri(xres$Mean)], xres$Lower.Quantile[lower.tri(xres$Lower.Quantile)],xres$Upper.Quantile[lower.tri(xres$Upper.Quantile)])
+}
+
+colnames(MHsumm)=paste(rep(c("treg-tum", "cd8-tum", "cd4-tum" , "mac-tum","cd8-treg", "cd4-treg","mac-treg", "cd4-cd8", "mac-cd8", "mac-cd4"), 3), 
+                       rep(c("mean", "low", "upper"), each=10 ))
+rownames(MHsumm)=gridsize
+```
+
+
+```{r}
+#tempA=matrix(nrow=30, ncol=4)
+## save all the metrics into one file
+
+MHmelt=melt(MHsumm)
+MHmelt2=cbind(MHmelt[grep("mean", MHmelt$Var2), ], MHmelt[grep("low", MHmelt$Var2), ], MHmelt[grep("upper", MHmelt$Var2), ])
+
+colnames(MHmelt2)=c("Var1", "mean", "meanV", "Var2", "low", "lowV", "Var3", "high", "higv")
+
+tempA=MHsumm[ 3,]
+ dfall=cbind(tempA[1:10], tempA[11:20], tempA[21:30 ])
+ dfall=data.frame(dfall)
+ dfall$comp=names(tempA)[1:10]
+ colnames(dfall)=c(  "mean", "lower", "upper", "comp")
+ dfall$type="gridshift"
+ ggplot(MHmelt2, aes(x=Var1, y=meanV, col=mean))+geom_point()+geom_errorbar(aes(ymin=lowV, ymax=higv), width=.2)+
+        ggtitle("case8 dcis Morisita-Horn variation of index")+theme_bw()+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+ 
+``` 
+ 
+We can also test the effect of shifting the  grid on stability:
+ 
+```{r, cache=T}
+gridsize=300
+distx=seq(0, gridsize/2, by=5)
+disty=seq(0,  gridsize/2, by=5)
+
+distXb=seq( gridsize/2, 0, by=-5)
+distYb=seq( gridsize/2, 0, by=-5)
+
+MHsummGrid=matrix(NA, nrow=(length(distx)^2), ncol=30)
+MHsummNoTum=matrix(NA, nrow=(length(distx)^2), ncol=30)
+MHsummNoImm=matrix(NA, nrow=(length(distx)^2), ncol=30)
+MHsummExcBoth=matrix(NA, nrow=(length(distx)^2), ncol=30)
+count=1
+
+for (i in 1:length(distx)){
+  for (j in 1:length(distXb)){
+    txlim=c(xlimV[1]+distx[i], xlimV[2]-distXb[i])
+    tylim=c(ylimV[1]+disty[j], ylimV[2]-distYb[j]) 
+    
+    
+    xcut=seq(txlim[1], txlim[2], length=round(diff(c(txlim))/gridsize)+1)
+    ycut=seq(tylim[1], tylim[2], length=round(diff(c(tylim))/gridsize)+1)
+    dfT=newdfR[which(newdfR$XLocN>txlim[1] & newdfR$XLocN <txlim[2] & newdfR$YLocN > tylim[1] & newdfR$YLocN < tylim[2] ), ]
+    ppOut=ppp(dfT$XLocN, dfT$YLocN, marks=dfT$type, poly=windowOut$bdry)
+    ppTess=tess(ppOut, xgrid=xcut, ygrid=ycut)
+    
+    nt=quadratcount(ppOut[ppOut$marks=="luminal"], tess=ppTess)
+    ni=quadratcount(ppOut[ppOut$marks=="Treg"], tess=ppTess)
+    na=quadratcount(ppOut[ppOut$marks=="CD8"], tess=ppTess)
+    ns=quadratcount(ppOut[ppOut$marks=="CD4"], tess=ppTess)
+    nm=quadratcount(ppOut[ppOut$marks=="Mac"], tess=ppTess)
+    
+    # use all points
+    allDat=data.frame(Tumor=as.vector(nt), Treg=as.vector(ni), CD8=as.vector(na), CD4=as.vector(ns), Mac=as.vector(nm))
+    xres<-mh(allDat, resample=10)
+    MHsummGrid[count, ]=c(xres$Mean[lower.tri(xres$Mean)], xres$Lower.Quantile[lower.tri(xres$Lower.Quantile)],xres$Upper.Quantile[lower.tri(xres$Upper.Quantile)])
+    # remove Imm-0
+    xb=rowSums(allDat[ , -1])
+    rmidx=which(allDat[ ,1]==0 & xb>0)
+    allDat2=allDat[-c(rmidx), ]
+    xres<-mh(allDat2, resample=10)
+    MHsummNoImm[count, ]=c(xres$Mean[lower.tri(xres$Mean)], xres$Lower.Quantile[lower.tri(xres$Lower.Quantile)],xres$Upper.Quantile[lower.tri(xres$Upper.Quantile)])
+   # rm Imm 0
+    rmidx2=which(allDat[ ,1]>0 & xb==0)
+    allDat2=allDat[-c(rmidx2), ]
+    xres<-mh(allDat2, resample=10)
+    MHsummNoTum[count, ]=c(xres$Mean[lower.tri(xres$Mean)], xres$Lower.Quantile[lower.tri(xres$Lower.Quantile)],xres$Upper.Quantile[lower.tri(xres$Upper.Quantile)])
+    # rm both
+    allDat2=allDat[-c(rmidx, rmidx2), ]
+    xres<-mh(allDat2, resample=10)
+    MHsummExcBoth[count, ]=c(xres$Mean[lower.tri(xres$Mean)], xres$Lower.Quantile[lower.tri(xres$Lower.Quantile)],xres$Upper.Quantile[lower.tri(xres$Upper.Quantile)])
+     
+   count=count+1
+  }
+}
+
+colnames(MHsummGrid)=paste(rep(c("treg-tum", "cd8-tum", "cd4-tum" , "mac-tum","cd8-treg", "cd4-treg","mac-treg", "cd4-cd8", "mac-cd8", "mac-cd4"), 3), 
+                       rep(c("mean", "low", "upper"), each=10 ))
+colnames(MHsummNoTum)=colnames(MHsummGrid)
+colnames(MHsummNoImm)=colnames(MHsummGrid)
+colnames(MHsummExcBoth)=colnames(MHsummGrid)
+
+
+MHgridshift=sapply(1:10, function(x) quantile(MHsummGrid[ ,x], c(0.025, 0.975), na.rm = T))
+dfallc=cbind(colMeans(MHsummGrid[ ,1:10], na.rm=T), MHgridshift[1, ], MHgridshift[2, ])
+dfallc=data.frame(dfallc)
+dfallc$comp=names(tempA)[1:10]
+colnames(dfallc)=c(  "mean", "lower", "upper", "comp")
+dfallc$type="gridshift"
+
+MHexcBoth=sapply(1:10, function(x) quantile(MHsummExcBoth[ ,x], c(0.025, 0.975), na.rm = T))
+dfallb=cbind(colMeans(MHsummExcBoth[ ,1:10], na.rm=T), MHexcBoth[1, ], MHexcBoth[2, ])
+dfallb=data.frame(dfallb)
+dfallb$comp=names(tempA)[1:10]
+colnames(dfallb)=c(  "mean", "lower", "upper", "comp")
+dfallb$type="shift_omit_both"
+
+MHexcImm=sapply(1:10, function(x) quantile(MHsummNoImm[ ,x], c(0.025, 0.975), na.rm = T))
+dfalli=cbind(colMeans(MHsummNoImm[ ,1:10], na.rm=T), MHexcImm[1, ], MHexcImm[2, ])
+dfalli=data.frame(dfalli)
+dfalli$comp=names(tempA)[1:10]
+colnames(dfalli)=c(  "mean", "lower", "upper", "comp")
+dfalli$type="shift_omit_imm"
+
+MHexcTum=sapply(1:10, function(x) quantile(MHsummNoTum[ ,x], c(0.025, 0.975), na.rm = T))
+dfallg=cbind(colMeans(MHsummNoTum[ ,1:10], na.rm=T), MHexcTum[1, ], MHexcTum[2, ])
+dfallg=data.frame(dfallg)
+dfallg$comp=names(tempA)[1:10]
+colnames(dfallg)=c(  "mean", "lower", "upper", "comp")
+dfallg$type="shift_omit_tum"
+
+dfall3=rbind(dfall, dfallg, dfalli, dfallb)
+
+```
+
+Plot the result below
+
+```{r}
+all9sam=rbind(cbind(dcis9mh, samp="dcis"), cbind(dfall3, samp="idc"))
+ggplot(all9sam, aes(x=comp, y=mean, col=samp))+facet_grid(~type)+geom_point()+geom_errorbar(aes(ymin=lower, ymax=upper))+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```

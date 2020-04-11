@@ -1,0 +1,601 @@
+# Analysis of H \& E images
+
+Below is the code used to analyse the H\&E tissue sections. As an example, code for this analysis is shown for case 9, and the same code is exmployed for all other samples
+
+## Macrodissecting regions
+
+In each tissue slide, view this within R and macrodissect the points within this which are confined within the DCIS, IDC and normal regions: the user is prompted to draw a box around these, and the area of interest is saved in a ROIlist. These are saved to file and are used in subsequent analysis. 
+
+6 regions of interest are determined in case 9IDC:
+1. Is a IDC region
+2. IDC
+3. DCIS like
+4. DCIS like
+5. normal
+6. normal
+
+Cells are color coded: immune is orange, tumor cells are green and stromal cells are purple.
+
+```{r, eval=F}
+idx=12
+savNames="9IDC"
+NROI=6 ## number of regions of interest intended (exclude entire slide)
+roiNames=c("idc1","idc2", "dcis1","dcis2", "n1","n2", "all")
+
+X11()
+plot(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY, col=QPs[[idx]]$CellType, pch='.')
+
+## check if this works, otherwise may manually need to input this data
+ROIlist=list()
+for (i in 1:NROI){
+ROIlist[[i]]<- fhs(QPs[[idx]][ ,3:4])
+}
+
+names(ROIlist)=roiNames[1:NROI]
+
+save(ROIlist,Ntab, file=paste(savNames, "extracted_points_qupath.RData", sep="_"))
+```
+
+```{r}
+palette(c("#fdb462", "#984ea3","#8dd3c7"))
+
+load("data/RecurrenceCohort/qupath/9IDC_extracted_points_qupath.RData")
+idx=12
+savNames="9IDC"
+
+gridsize=100
+NROI=6 ## number of regions of interest intended (exclude entire slide)
+roiNames=c("idc1","idc2", "dcis1","dcis2", "n1","n2", "all")
+
+
+xlimV=c(min(QPs[[idx]]$CentroidX), max(QPs[[idx]]$CentroidX))
+ylimV=c(min(QPs[[idx]]$CentroidY), max(QPs[[idx]]$CentroidY))
+
+xsize=diff(xlimV)/1000
+ysize=diff(ylimV)/1000
+
+xcut=seq(xlimV[1], xlimV[2], length=round(diff(xlimV)/gridsize)+1)
+ycut=seq(ylimV[1], ylimV[2], length=round(diff(ylimV)/gridsize)+1)
+
+windowOut=ripras(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY)
+ppOutR=ppp(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY, marks=QPs[[idx]]$CellType, poly=windowOut$bdry)
+
+ppTess=tess(ppOut, xgrid=xcut, ygrid=ycut)
+
+nt=quadratcount(ppOutR[ppOutR$marks=="Tumor"], tess=ppTess)
+ni=quadratcount(ppOutR[ppOutR$marks=="Immune cells"], tess=ppTess)
+ns=quadratcount(ppOutR[ppOutR$marks=="Stroma"], tess=ppTess)
+na=quadratcount(ppOutR, tess=ppTess)
+
+bd=list()
+for (i in 1:NROI){
+  bd[[i]]=ripras(QPs[[idx]]$CentroidX[as.numeric(ROIlist[[i]])] , QPs[[idx]]$CentroidY[as.numeric(ROIlist[[i]])])
+}
+
+plot(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY, col=QPs[[idx]]$CellType, pch='.')
+for (i in 1:length(bd)){
+  polygon(bd[[i]]$bdry[[1]]$x, bd[[i]]$bdry[[1]]$y)
+  text(mean(bd[[i]]$xrange), mean(bd[[i]]$yrange), i)
+}
+
+# Create a mask for later analysis
+
+Mask=array(numeric(), c(nrow(nt), ncol(nt), NROI))
+
+for (i in 1:NROI){
+  xidc1=unique(tileindex(QPs[[idx]]$CentroidX[as.numeric(ROIlist[[i]])], QPs[[idx]]$CentroidY[as.numeric(ROIlist[[i]])], ppTess))
+  xidc1b=strsplit(as.character(xidc1), ", col ")
+  xvals=as.numeric(sapply(xidc1b, function(x) substr(x[1], 10, 13)))
+  yvals=as.numeric(sapply(xidc1b, function(x) x[2]))
+  tempMat=matrix(0, ncol=ncol(Mask), nrow=nrow(Mask))
+    for (j in 1:length(xvals)){
+    tempMat[xvals[j], yvals[j]]=1
+    }
+   Mask[, , i]=tempMat
+}
+```
+
+## Compositional summary
+
+The proportion of cells within each ROI is shown below for Case 9:
+
+```{r}
+
+Ntab=sapply(ROIlist, function(x) table(QPs[[idx]][x ,2]))
+Ntab=cbind(Ntab, all=table(QPs[[idx]][ ,2]))
+
+CellSummN=t(Ntab)/colSums(Ntab)
+CellSummN2=CellSummN[NROI+1, ]
+
+barplot(t(CellSummN), col=c("#fdb462", "#984ea3","#8dd3c7"), main="Case 9 proportion of cells at each site")
+```
+
+Accross all the patient samples, we can assess what the composition is like in each H\&E section. The regions are annotated as:
+
+* dd: dcis region within a H\&E section diagnosed as DCIS
+* id: adjacent dcis within a diagnosed IDC
+* ii: idc region within a diagnosed IDC.
+
+Below are the raw number of cells in each region
+
+```{r}
+SummData=read_xlsx("data/RecurrenceCohort/qupath/cellcounts_HE.xlsx", sheet=2)
+lx2=which(SummData$Sample%in%c("dcis", "idc", "dcisAll", "idcAll"))
+SummData2=SummData[lx2, c(1:5)]
+SummData2melt=melt(SummData2)
+SummData2melt$Sample2=paste( substr(SummData2melt$Case, 2, 2), substr(SummData2melt$Sample, 1, 1))
+SummData2melt$Case2=substr(SummData2melt$Case,1,1)
+palette(c("#fdb462", "#984ea3","#8dd3c7", "#e41a1c", "#377eb8", "#f781bf", "#999999"))
+
+ggplot(SummData2melt, aes(x=Sample2, y=value, fill=variable))+geom_bar(stat="identity")+facet_grid(~Case2)+scale_fill_manual(values=c("#fdb462", "#984ea3","#8dd3c7", "#e41a1c", "#377eb8", "#f781bf", "#999999"))
+```
+
+For this study, we focus only on DCIS regions within a clincailly diagnosed speciment DCIS, and IDC regions within a clinically diagnosed IDC specimen. The proportions of these different cells are shown below:
+
+
+
+<span style="color:red"> Create a bar plot here </span>
+
+```{r, fig.height=6}
+rmX=grep("dcis", SummData2$Sample)
+rmY=grep("idc", SummData2$Case)
+rmZ=intersect(rmX, rmY)
+
+SD2=SummData2[-rmZ, ]
+SD3=SD2[ ,3:5]/rowSums(SD2[ ,3:5])
+
+colnames(SD3)=colnames(SD2)[3:5]
+rownames(SD3)=t(SD2[ ,2])
+barplot(t(SD3), col=c("#fdb462", "#984ea3","#8dd3c7"))
+
+```
+
+## Spatial statistics: based on nearest neighbour distances
+
+Using these points, we can conduct spatial statistics using the points in these regions using the spatsats package.
+
+```{r, eval=F}
+xlimV=c(min(QPs[[idx]]$CentroidX), max(QPs[[idx]]$CentroidX))
+ylimV=c(min(QPs[[idx]]$CentroidY), max(QPs[[idx]]$CentroidY))
+
+xsize=diff(xlimV)/1000
+ysize=diff(ylimV)/1000
+
+xcut=seq(xlimV[1], xlimV[2], length=round(diff(xlimV)/gridsize)+1)
+ycut=seq(ylimV[1], ylimV[2], length=round(diff(ylimV)/gridsize)+1)
+
+windowOut=ripras(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY)
+ppOutR=ppp(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY, marks=QPs[[idx]]$CellType, poly=windowOut$bdry)
+
+ppTess=tess(ppOut, xgrid=xcut, ygrid=ycut)
+
+nt=quadratcount(ppOutR[ppOutR$marks=="Tumor"], tess=ppTess)
+ni=quadratcount(ppOutR[ppOutR$marks=="Immune cells"], tess=ppTess)
+ns=quadratcount(ppOutR[ppOutR$marks=="Stroma"], tess=ppTess)
+na=quadratcount(ppOutR, tess=ppTess)
+
+bd=list()
+for (i in 1:NROI){
+  bd[[i]]=ripras(QPs[[idx]]$CentroidX[as.numeric(ROIlist[[i]])] , QPs[[idx]]$CentroidY[as.numeric(ROIlist[[i]])])
+}
+```
+
+### Nearest neighbor distances
+
+One of the most straigh-forwards ways of lookig for spatial differences is by calculating nearest neighbour distances between each immune cell to it's nearest tumor cell. We can also explore how much this metric varies wehen we consider 1 nearest neighbour, 3 nearest neighbours or 5 nearest neighbours.
+
+Below are the CDFs of the distances for the above segmented regions, light pink are the dcis regions, maroon are idc and blue are the normal regions.
+
+Example code for calculating nearest neighbor distances in case 9. We can explore differences between k=1, 3 and 5. Differences between two curves is calculated by the KS statistic.
+
+Both dcis and idc appear to have shorter immune-tumor/epithelial distances compared to the normals.
+
+```{r, cache=T}
+amx1=c("Immune", "Stroma", "Tumor")
+
+lx1=grep("dcis", roiNames) 
+cx1=brewer.pal(9, "RdPu")[ 2:(length(lx1)+1)]
+lx2=grep("idc", roiNames)
+cx2=brewer.pal(9, "PuRd")[ 9:(10-length(lx2))]
+lx3=grep("n", roiNames)
+cx3=brewer.pal(9, "BuPu")[2:(length(lx1)+1)]
+palCols=rep(NA, length(roiNames))
+palCols[lx1]=cx1
+palCols[lx3]=cx3
+palCols[lx2]=cx2
+
+palette(palCols)
+
+d2=nndist(ppOutR, by=marks(ppOutR), k=c(1:5))
+Dist1=d2[ ,grep("dist.1", colnames(d2))]
+knn3=sapply(amx1, function(x) rowMeans(d2[ ,grep(x, colnames(d2))[1:3]]))
+knn5=sapply(amx1, function(x) rowMeans(d2[ ,grep(x, colnames(d2))]))
+knnDistMatrix=abind(Dist1, knn3, knn5, along=3)
+
+par(mfrow=c(1,3))
+for (i in 1:3){
+  if (NROI>1){
+# compare the different lines?
+  ptest=matrix(NA, nrow=NROI, ncol=NROI)
+  namtest=matrix(NA, nrow=NROI, ncol=NROI)
+  for (j in 1:(NROI-1)){
+    for (k in (j+1):NROI){
+      ptest[j,k]=ks.test(knnDistMatrix[ which(ppOutR$marks[as.numeric(ROIlist[[j]])]=="Immune cells"),3, i],
+                         knnDistMatrix[ which(ppOutR$marks[as.numeric(ROIlist[[k]])]=="Immune cells"),3, i])$p.value
+      namtest[j,k]=paste(roiNames[j], roiNames[k])
+    }}
+
+  pvals=ptest[upper.tri(ptest)]
+  names(pvals)=namtest[upper.tri(ptest)]
+  }
+
+plot(NA, xlim=c(0, 200), ylim=c(0, 1), main=sprintf("Immune-Tum k=%s", i*2-1 ), ylab="CDF", xlab="Nearest stromal distance")
+## plot the "stromal distances"?
+for (j in 1:NROI){
+  lines(ecdf(knnDistMatrix[ which(ppOutR$marks[as.numeric(ROIlist[[j]])]=="Immune cells"),3, i]), lwd=1, col=j)
+}
+legend("topright", legend=roiNames, col=c(1:NROI), pch=19)
+
+if (NROI>1){
+legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
+}
+}
+
+```
+
+We can also perform the same analysis for the immune-stroma fraction. In all these cases there is virtually no difference between 
+
+```{r, cache=T}
+par(mfrow=c(1,3))
+for (i in 1:3){
+if (NROI>1){
+ptest=matrix(NA, nrow=NROI, ncol=NROI)
+namtest=matrix(NA, nrow=NROI, ncol=NROI)
+for (j in 1:(NROI-1)){
+  for (k in (j+1):NROI){
+    ptest[j,k]=ks.test(knnDistMatrix[ which(ppOutR$marks[as.numeric(ROIlist[[j]])]=="Immune cells"),2, i],
+                       knnDistMatrix[ which(ppOutR$marks[as.numeric(ROIlist[[k]])]=="Immune cells"),2, i])$p.value
+    namtest[j,k]=paste(roiNames[j], roiNames[k])
+  }}
+
+pvals=ptest[upper.tri(ptest)]
+names(pvals)=namtest[upper.tri(ptest)]
+}
+
+plot(NA, xlim=c(0, 200), ylim=c(0, 1), main=sprintf("Immune-Stroma k=%s", i*2-1 ), ylab="CDF", xlab="Nearest stromal distance")
+## plot the "stromal distances"?
+for (j in 1:NROI){
+  lines(ecdf(knnDistMatrix[ which(ppOutR$marks[as.numeric(ROIlist[[j]])]=="Immune cells"),2, i]), lwd=1, col=j)
+}
+
+if (NROI>1){
+legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
+}
+legend("topright", legend=roiNames, col=c(1:NROI), pch=19)
+}
+```
+
+### The interacting fraction
+
+We can define the interacting fraction by drawing a vertical line at a given distance R, and finding the intersection with the y-axis in the CDF plot. I.e. this is the porportion of immune cells which are within a distance R of a tumor cell. 
+
+We can collate the values for all samples below:
+
+```{r}
+qpathdir="data/RecurrenceCohort/qupath/"
+mx1=dir(qpathdir, "knn_mh_outputs*")
+
+snames=sapply(strsplit(mx1, "_"), function(x) x[4])
+
+
+Allknn=list()
+AllMH=list()
+
+AllROI=list()
+DistZscores=list()
+
+AllTIdist=list()
+AllITdist=list()
+
+AllTInorm=list()
+AllITnorm=list()
+
+ncountD=1
+repidx=NA
+
+for (i in 1:length(mx1)){
+  load(paste(qpathdir, mx1[i], sep=""))
+  a1=grep("DCIS", snames[i])
+  a2=grep("IDC", snames[i])
+  
+  AllROI[[i]]=ROIlist
+  DistZscores[[i]]=Zscores
+  AllMH[[i]]=dfall3
+  Allknn[[i]]=knnDistMatrix
+  
+  if (length(a1)==1){
+    x1=grep("dcis", names(ITdist))
+  #  AllTIdist[[i]]=unlist(TIdist[x1])
+    AllITdist[[i]]=unlist(ITdist[x1])
+  
+  }
+   if (length(a2)==1){
+    x1=grep("idc", names(ITdist))
+    AllITdist[[i]]=unlist(ITdist[x1])
+  #  AllTIdist[i]=unlist(TIdist[x1])
+   
+   }
+   a3=grep("n", names(ITdist))
+ #  AllTInorm[[i]]=unlist(TIdist[a3])
+   AllITnorm[[i]]=unlist(ITdist[a3])
+}
+
+
+names(AllITdist)=paste(snames, 1)#paste(rep(snames, times=repidx), unlist(sapply(repidx, function(x) seq(1, x))))
+names(AllITnorm)=paste(snames, 1)
+```
+
+
+```{r}
+intDistance=10
+PropIT=sapply(AllITdist, function(x) length(which(x<intDistance)))/sapply(AllITdist, length)
+#PropTI=sapply(AllTIdist, function(x) length(which(x<intDistance)))/sapply(AllTIdist, length)
+
+AllIT=sapply(AllITnorm, function(x) length(which(x<intDistance)))/sapply(AllITnorm, length)
+#AllTI=sapply(AllTInorm, function(x) length(which(x<intDistance)))/sapply(AllTInorm, length)
+
+Prop2=rbind(PropIT, AllIT)
+#colnames(Prop2)=snames
+
+Prop2Melt=melt(Prop2)
+Prop2Melt$Pat=substr(Prop2Melt$Var2, 1, 1)
+Prop2Melt$Reg=substr(Prop2Melt$Var2, 2, 2)
+
+ggplot(Prop2Melt, aes(x=Reg, y=value, fill=Var1))+geom_bar(stat="identity", position="dodge")+facet_grid(~Pat)+ggtitle("Proportion of cells within interacting distance")+scale_fill_discrete(name = "Sample", labels = c("tumor (dcis idc)", "Normal"))+xlab("Region (DCIS or IDC HE slide")+ylab("Proportion")
+```
+
+
+## Morisita-Horn metric
+
+The Morisita-Horn index can be interpreted as a spatial correlation coefficient between two cell types within an image. Here, we consider the immune population and the tumor population.
+
+For the whole image using boostrap method:
+
+```{r, cache=T}
+## need to set seed for 95% CI. There is too much variation in these values
+
+allDat=data.frame(Tumor=as.vector(nt), Immune=as.vector(ni), Stroma=as.vector(ns))
+xres <-mh(allDat, resample=500)
+
+# refine this to regions of interest
+mhRegion=function(nt, ni, ns, mask, resample=500){
+  idc1Dat=data.frame(Tumor=as.vector(nt)*as.vector(mask), Immune=as.vector(ni)*as.vector(mask), Stroma=as.vector(ns)*as.vector(mask))
+  rmidx=which(is.na(idc1Dat[ ,1])==T)
+  
+  if (length(rmidx>0)){
+  idc1Dat=idc1Dat[-rmidx, ]
+  }
+  lx1=colSums(idc1Dat)
+  lx2=which(lx1==0)
+  if (length(lx2)>0){
+    idc1Dat[ ,lx2]=1
+  }
+  xres2 <-mh(idc1Dat, resample=resample)
+  if (length(lx2)>0){
+    xres2$Mean[lx2, ]=NA
+    xres2$Lower.Quantile[lx2, ]=NA
+    xres2$Upper.Quantile[lx2, ]=NA
+  }
+  xres2
+}
+
+MHsumm=matrix(NA, nrow=3, ncol=3*(NROI+1))
+
+for (i in 1:NROI){
+  MH1=mhRegion(nt, ni, ns, Mask[ , , i])
+  MHsumm[ 1,(3*i-2):(3*i)]=MH1$Mean[lower.tri(MH1$Mean)]
+  MHsumm[ 2,(3*i-2):(3*i)]=MH1$Lower.Quantile[lower.tri(MH1$Lower.Quantile)]
+  MHsumm[ 3,(3*i-2):(3*i)]=MH1$Upper.Quantile[lower.tri(MH1$Upper.Quantile)]
+}
+
+MHsumm[ 1,(3*(NROI+1)-2):(3*(NROI+1))]=xres$Mean[lower.tri(xres$Mean)]
+MHsumm[ 2,(3*(NROI+1)-2):(3*(NROI+1))]=xres$Lower.Quantile[lower.tri(xres$Lower.Quantile)]
+MHsumm[ 3,(3*(NROI+1)-2):(3*(NROI+1))]=xres$Upper.Quantile[lower.tri(xres$Upper.Quantile)]
+
+Samp=rep(roiNames, each=3)
+Comp=rep(c("TI", "ST", "SI"), (NROI+1))
+
+dfall=data.frame(Samp=Samp, Comp=Comp, MH=MHsumm[ 1,], MHlow=MHsumm[2,], MHhi=MHsumm[3,])
+```
+
+Plot the output for case 9 for example:
+
+```{r}
+ggplot(dfall, aes(x=Samp, y=MH, col=Comp))+geom_point()+geom_errorbar(aes(ymin=MHlow, ymax=MHhi), width=.2)
+```
+
+We can also test the stability but gradually shifting the grid to see what the error margin is like using the below code (Note this is not run due to time constraints). In addition, we can remove grids which only have "tumor" cells, in order to evaluate the interaction in the stroma and at the tumor-stroma interface in order to account for some differences in tissue architecture between dcis and idc.
+
+```{r, eval=F}
+distx=seq(0, gridsize/2, by=2)
+disty=seq(0,  gridsize/2, by=2)
+
+distXb=seq( gridsize/2, 0, by=-2)
+distYb=seq( gridsize/2, 0, by=-2)
+
+MHsummGrid=matrix(NA, nrow=(length(distx)^2), ncol=3*NROI)
+MHsummNoTum=matrix(NA, nrow=(length(distx)^2), ncol=3*NROI)
+MHsummNoImmstr=matrix(NA, nrow=(length(distx)^2), ncol=3*NROI)
+MHsummNoTumImm=matrix(NA, nrow=(length(distx)^2), ncol=3*NROI)
+MHsummNoImm=matrix(NA, nrow=(length(distx)^2), ncol=3*NROI)
+
+count=1
+
+for (i in 1:length(distx)){ #length(distx)
+  for (j in 1:length(distXb)){ #length(distXb)
+    txlim=c(xlimV[1]+distx[i], xlimV[2]-distXb[i])
+    tylim=c(ylimV[1]+disty[j], ylimV[2]-distYb[j]) 
+    
+    xcut=seq(txlim[1], txlim[2], length=round(diff(c(txlim))/gridsize)+1)
+    ycut=seq(tylim[1], tylim[2], length=round(diff(c(tylim))/gridsize)+1)
+    
+    # cut into quadrants
+    dfT=QPs[[idx]][which(QPs[[idx]]$CentroidX >txlim[1] & QPs[[idx]]$CentroidX <txlim[2] & 
+                           QPs[[idx]]$CentroidY > tylim[1] & QPs[[idx]]$CentroidY < tylim[2] ), ]
+    ppOut=ppp(dfT$CentroidX, dfT$CentroidY, marks=dfT$CellType, poly=windowOut$bdry)
+    ppTessT=tess(ppOut, xgrid=xcut, ygrid=ycut)
+    nt=quadratcount(ppOut[ppOut$marks=="Tumor"], tess=ppTessT)
+    ni=quadratcount(ppOut[ppOut$marks=="Immune cells"], tess=ppTessT)
+    ns=quadratcount(ppOut[ppOut$marks=="Stroma"], tess=ppTessT)
+    
+    # Create a Mask for each
+    Mask=array(numeric(), c(nrow(nt), ncol(nt), NROI))
+    for (k in 1:NROI){
+      xidc1=unique(tileindex(QPs[[idx]]$CentroidX[as.numeric(ROIlist[[k]])], QPs[[idx]]$CentroidY[as.numeric(ROIlist[[k]])], ppTessT))
+      xidc1b=strsplit(as.character(xidc1), ", col ")
+      xvals=as.numeric(sapply(xidc1b, function(x) substr(x[1], 10, 13)))
+      yvals=as.numeric(sapply(xidc1b, function(x) x[2]))
+      tempMat=matrix(0, ncol=ncol(Mask), nrow=nrow(Mask))
+      for (l in 1:length(xvals)){
+        tempMat[xvals[l], yvals[l]]=1
+      }
+      Mask[, , k]=tempMat
+    }
+    
+    # figure out allDat for each ROI
+    allDat2=lapply(1:NROI, function(x) data.frame(Tumor=as.vector(nt)*as.vector(Mask[, , x]), 
+                                                          Immune=as.vector(ni)*as.vector(Mask[, , x]), 
+                                                          Stroma=as.vector(ns)*as.vector(Mask[, , x])))
+    allDat3<-lapply(allDat2, function(x) x[-which(rowSums(x)==0), ])
+    
+    # use all points
+    xres<-lapply(allDat3, function(x) mh(x[ ,1:2], resample=1))
+    MHsummGrid[count, ]=as.vector(sapply(xres, function(x) x$Mean[lower.tri(x$Mean)]))
+    allDat4<-lapply(allDat3, function(x) x[-which(rowSums(x[ ,2:3])<2), ])
+    cidx=sapply(allDat4, nrow)
+    ax=which(cidx==0)
+    if (length(ax)>0){
+      allDat4[ax]=allDat3[ax]
+    }
+    xres<-lapply(allDat4, function(x) mh(x[ ,1:2], resample=1))
+    MHsummNoImmstr[count, ]=as.vector(sapply(xres, function(x) x$Mean[lower.tri(x$Mean)]))
+    # rm Tum==0
+    allDat4<-lapply(allDat3, function(x)  x[-which(x[ ,1]<2), ])
+    cidx=sapply(allDat4, nrow)
+    ax=which(cidx==0)
+    if (length(ax)>0){
+      allDat4[ax]=allDat3[ax]
+    }
+    xres<-lapply(allDat4, function(x) mh(x[ ,1:2], resample=1))
+    MHsummNoTum[count, ]=as.vector(sapply(xres, function(x) x$Mean[lower.tri(x$Mean)]))
+    # rm Imm = 0  and Tum =0
+    allDat4<-lapply(allDat3, function(x) x[-which(rowSums(x[ ,1:2])<2), ])
+    cidx=sapply(allDat4, nrow)
+    ax=which(cidx==0)
+    if (length(ax)>0){
+      allDat4[ax]=allDat3[ax]
+    }
+    xres<-lapply(allDat4, function(x) mh(x[, 1:2], resample=1))
+    MHsummNoTumImm[count, ]=as.vector(sapply(xres, function(x) x$Mean[lower.tri(x$Mean)]))
+    
+    # rm Imm = 0 only
+    allDat4<-lapply(allDat3, function(x) x[-which(x[ ,2]<2), ])
+    cidx=sapply(allDat4, nrow)
+    ax=which(cidx==0)
+    if (length(ax)>0){
+      allDat4[ax]=allDat3[ax]
+    }
+    xres<-lapply(allDat4, function(x) mh(x[ ,1:2], resample=1))
+    MHsummNoImm[count, ]=as.vector(sapply(xres, function(x) x$Mean[lower.tri(x$Mean)]))
+    
+    count=count+1
+  }
+}
+
+colnames(MHsummGrid)=paste(rep(roiNames, each=3), rep(c("imm-tum", "str-tum", "str-imm"), NROI), sep="-")
+colnames(MHsummNoTum)=colnames(MHsummGrid)
+colnames(MHsummNoImmstr)=colnames(MHsummGrid)
+colnames(MHsummNoTumImm)=colnames(MHsummGrid)
+colnames(MHsummNoImm)=colnames(MHsummGrid)
+
+
+MHnoim=sapply(1:ncol(MHsummNoImm), function(x) quantile(MHsummNoImm[ ,x], c(0.025, 0.975), na.rm = T))
+dfallc=cbind(colMeans(MHsummNoImm, na.rm=T), MHnoim[1, ], MHnoim[2, ])
+dfallc=data.frame(dfallc)
+dfallc$comp=colnames(MHsummGrid)
+colnames(dfallc)=c("mean", "lower", "upper", "comp")
+dfallc$type="Rm imm = 0"
+
+MHrall=sapply(1:ncol(MHsummGrid), function(x) quantile(MHsummGrid[ ,x], c(0.025, 0.975), na.rm = T))
+dfall=cbind(colMeans(MHsummGrid, na.rm=T), MHrall[1, ], MHrall[2, ])
+dfall=data.frame(dfall)
+dfall$comp=colnames(MHsummGrid)
+colnames(dfall)=c("mean", "lower", "upper", "comp")
+dfall$type="keep all"
+
+
+MHexcBoth=sapply(1:ncol(MHsummGrid), function(x) quantile(MHsummNoTumImm[ ,x], c(0.025, 0.975), na.rm = T))
+dfallb=cbind(colMeans(MHsummNoTumImm, na.rm=T), MHexcBoth[1, ], MHexcBoth[2, ])
+dfallb=data.frame(dfallb)
+dfallb$comp=colnames(MHsummGrid)
+colnames(dfallb)=c(  "mean", "lower", "upper", "comp")
+dfallb$type="rm imm=0 or tum=0"
+
+MHexcImm=sapply(1:ncol(MHsummGrid), function(x) quantile(MHsummNoImmstr[ ,x], c(0.025, 0.975), na.rm = T))
+dfalli=cbind(colMeans(MHsummNoImmstr, na.rm=T), MHexcImm[1, ], MHexcImm[2, ])
+dfalli=data.frame(dfalli)
+dfalli$comp=colnames(MHsummGrid)
+colnames(dfalli)=c(  "mean", "lower", "upper", "comp")
+dfalli$type="rm_imm_str0"
+
+
+MHexcTum=sapply(1:ncol(MHsummGrid), function(x) quantile(MHsummNoTum[ ,x], c(0.025, 0.975), na.rm = T))
+dfallg=cbind(colMeans(MHsummNoTum, na.rm=T), MHexcTum[1, ], MHexcTum[2, ])
+dfallg=data.frame(dfallg)
+dfallg$comp=colnames(MHsummGrid)
+colnames(dfallg)=c(  "mean", "lower", "upper", "comp")
+dfallg$type="rm_tum=0"
+dfall3=rbind(dfall, dfallg, dfalli, dfallb, dfallc)
+```
+
+
+Using this process, we can compute an average and estimate the error for this process. Below, we report the MH-index across the patient samples. Firstly, we can visualise the immune-tumor interactions. The normal samples seem to have a higher interaction between immune and epithelial cells. 
+
+
+```{r}
+# patha="~/Desktop/spatstat_rslt/"
+# path1=dir(patha, "mh_analysis.RData")
+
+
+names(AllMH)=snames
+MHmelt=melt(AllMH, measure.vars="mean") 
+MHmelt2=MHmelt[grep("imm-tum", MHmelt$comp), ]
+MHmelt2$nam=substr(MHmelt2$L1, 1, 1)
+MHmelt2$class=substr(MHmelt2$L1, 2, 2)
+MHmelt2$sampType=substr(MHmelt2$comp, 1, 1)
+MHmelt2=MHmelt2[-which(MHmelt2$class=="I" & MHmelt2$sampType=="d"), ]
+#MHmelt2$sampType2=paste(MHmelt2$comp, MHmelt$type)
+MHmelt3=MHmelt2[which(MHmelt2$type=="rm_imm_str0"), ]
+
+
+ggplot(MHmelt3, aes(x=class, y=value, col=sampType))+geom_point()+facet_grid(~nam)+geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+scale_color_manual(values=c("#E9A3C9", "#C51B7D", "#B5B2CC"))
+
+```
+
+We can repeat the same analysis looking at immune-stroma mixing to see if this explains some of the spatial patterns that emerge. 
+
+
+```{r}
+MHmelt2=MHmelt[grep("str-imm", MHmelt$comp), ]
+MHmelt2$nam=substr(MHmelt2$L1, 1, 1)
+MHmelt2$class=substr(MHmelt2$L1, 2, 2)
+MHmelt2$sampType=substr(MHmelt2$comp, 1, 1)
+MHmelt2=MHmelt2[-which(MHmelt2$class=="I" & MHmelt2$sampType=="d"), ]
+#MHmelt2$sampType2=paste(MHmelt2$comp, MHmelt$type)
+MHmelt3=MHmelt2[which(MHmelt2$type=="rm_imm_str0"), ]
+
+
+ggplot(MHmelt3, aes(x=class, y=value, col=sampType))+geom_point()+facet_grid(~nam)+geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+scale_color_manual(values=c("#E9A3C9", "#C51B7D", "#B5B2CC"))
+```

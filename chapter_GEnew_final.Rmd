@@ -1,0 +1,284 @@
+# RNAseq analysis
+
+In this section, we will look at:
+
+- transcriptional heterogeneity
+- Immune cell deconvolution using CIBERSORT
+- single sample GSEA to determine enriched and under-enriched gene sets (recurence data set)
+- Differential gene expression analysis in the Abba cohort to find non-immune related terms associated with the transition from normal to DCIS
+
+## Transcriptional heterogeneity
+
+Transcriptional heterogeneity is assessed using either RPKM or TPM counts to take into account gene length. The Shannon diversity is applied to determine diversity:
+
+Overall it appears that:
+
+* in the Abba dataset, the Normals have higher transcriptional heterogeneity than the tumors
+* in the recurrence cohort, transcriptional diversity seems to be similar
+* differences in transcriptional diversity are larger using RPKM rather than TPM counts
+
+```{r, fig.height=7}
+## compute the transcriptional diversity using RPKM, TPM and new TPM data:
+RPKMdiv=local.rnaseq.shannon(RPKMtab)
+TPMdiv=local.rnaseq.shannon(TPMtable2)
+
+AllVal=rbind(RPKMdiv, TPMdiv)
+par(mfrow=c(2,2))
+barplot(AllVal[ 1,], beside=T, las=2, main="Recurrence RPKM", ylab="Shannon diversity")
+barplot(AllVal[2,], beside=T, las=2, main="Recurrence TPM", ylab="Shannon diversity")
+
+## Abba dataset:
+Abbadiv=local.rnaseq.shannon(TPMAbba)
+AbbaRPKM=local.rnaseq.shannon(rpkmAbba)
+barplot(AbbaRPKM, beside=T, las=2, main="Abba RPKM", ylab="Shannon diversity")
+barplot(Abbadiv, beside=T, las=2, main="Abba TPM", ylab="Shannon diversity")
+```
+
+## CIBERSORT
+
+[CIBERSORT](https://cibersort.stanford.edu/) is a deconvolution method which infers the proportion of different immune cells within a bulk tissue sample. The input was TPM counts from RNAseq data. From this data, we observe
+
+* high number of macrophages in stromal samples (marked with an extra S at the end of the name)
+* lower macrophages in 8DCIS compared to 8IDC
+* higher B cell count in DCIS
+
+The condensed distribution looks like this:
+
+```{r}
+CIBrsltB=read.delim("data/RecurrenceCohort/expression//DCIS_IDC_CIBERSORT.Output_Job22.txt")
+rownames(CIBrsltB)=CIBrsltB[ ,1]
+
+mData=melt(CIBrsltB[ ,1:23])
+mData$type=c(substr(mData$Input.Sample, 2, 6))
+mData$type[which(mData$type=="IDCS"| mData$type=="DCISS")]="stroma"
+colsIn=brewer.pal(11, "Spectral")
+colsIn2=c(colsIn[c(9:7)], brewer.pal(7, "YlOrRd"), "#bdbdbd","#636363", brewer.pal(4, "RdPu"), "#af8dc3", colsIn[11], brewer.pal(4, "Blues")[4:1])
+colsIn3=colsIn2[c(1, 3,5,8, 11,13, 16, 18, 19,21, 22)]
+
+
+mData$variable2=substr(mData$variable, 1, 3)
+mData$variable2[grep("CD8", mData$variable)]="T.CD8"
+mData$variable2=factor(mData$variable2, unique(mData$variable2))
+# draw boxes around the 
+
+ggplot(mData, aes(x=Input.Sample, y=value, fill=variable2))+geom_bar(stat="identity")+scale_fill_manual(values=colsIn3)+ggtitle("Immune decomposition in Recurrence set")
+```
+
+Whereas, if we resolve the subpopulations of macrophages, T cells etc, we see this: 
+
+```{r}
+ggplot(mData, aes(x=Input.Sample, y=value, fill=variable))+geom_bar(stat="identity")+scale_fill_manual(values=colsIn2)+facet_grid(~type, drop=T, scales = "free_x", space = "free")
+```
+
+Repeating the same analysis for the Abba datset shows:
+
+* high number of macrophages in the DCIS
+* higher B cell count
+* higher proportion of CD4 T cells, but not CD8
+* a reduced proportion in mast and dendritic cells involved in the innate immune system
+
+```{r}
+AbbaCIB=read.csv("data/Abba2015/Abba_vsd_output_estimate_CIBERSORT.csv", header=T)
+m1=match(AbbaCIB$X, AbbaClin$run_accession)
+AbbaCIB$X=AbbaClin$SampleID[m1]
+
+# don't run if already running
+colsIn=brewer.pal(11, "Spectral")
+colsIn2=c(colsIn[c(9:7)], brewer.pal(7, "YlOrRd"), "#bdbdbd","#636363", brewer.pal(4, "RdPu"), "#af8dc3", colsIn[11], brewer.pal(4, "Blues")[4:1])
+colsIn3=colsIn2[c(1, 3,5,8, 11,13, 16, 18, 19,21, 22)]
+
+acibmelt=melt(AbbaCIB[ ,1:23])
+# sort the Abba samples according to increasing TIL score?
+acibmelt$TIL=AbbaClin$ITIL[match(acibmelt$X, AbbaClin$SampleID)]
+acibmelt$TIL[which(acibmelt$TIL=="-")]=NA
+acibmelt$TIL=as.numeric(acibmelt$TIL)
+
+acibmelt$TILcut=as.character(cut(acibmelt$TIL, c(-5, 15, 35, 70), c("L", "M", "P")))
+acibmelt$TILcut[grep("N", acibmelt$X)]="ab"
+
+
+ggplot(acibmelt, aes(x=X, y=value, fill=variable))+geom_bar(stat="identity")+scale_fill_manual(values=colsIn2)+facet_grid(~TILcut, drop=T, scales = "free_x", space = "free")+ggtitle("Immune decomposition in Abba set")
+#ggplot(acibmelt, aes(x=TILcut, y=value, fill=TILcut))+geom_boxplot()+scale_fill_manual(values=c("#bebada", brewer.pal(3, "Greens")))+facet_wrap(~variable, drop=T, scale="free")+ggtitle("Immune decomposition in Abba set")
+```
+
+We also explored the frequency of each population when subsetting based on immune infiltration: Samples in the Abba set were categorised as low (between 0 to 15\% TILs), medium (15 - 35 \%) and high (35\% and higher). These were compared to the normal cases (in purple) below:
+
+```{r}
+
+acibmelt$variable2=substr(acibmelt$variable, 1, 3)
+acibmelt$variable2[grep("CD8", acibmelt$variable)]="T.CD8"
+acibmelt$variable2=factor(acibmelt$variable2, unique(acibmelt$variable2))
+acibmelt$type=substr(acibmelt$X, 1,1)
+
+# # sort the Abba samples according to increasing TIL score?
+acibmelt=acibmelt[order(acibmelt$TIL), ]
+Xun=unique(acibmelt$X)
+acibmelt$X=factor(acibmelt$X, levels=Xun)
+
+#ggplot(acibmelt, aes(x=X, y=value, fill=variable2))+geom_bar(stat="identity")+scale_fill_manual(values=colsIn3)+facet_grid(~type, drop=T, scales = "free_x", space = "free")+ggtitle("Immune decomposition in Abba set")
+
+## Column side colors
+
+ColSideColors=factor(substr(colnames(TPMAbba), 1, 1))
+ColSideColorsB=AbbaClin$ITIL[match(levels(acibmelt$X), AbbaClin$SampleID)]
+ColSideColorsB[which(ColSideColorsB=="-")]=NA
+ColSideColorsB=as.character(cut(as.numeric(ColSideColorsB), c(-5, 15, 35, 70), brewer.pal(3, "Greens")))
+
+ggplot(acibmelt[-which(is.na(acibmelt$TILcut)), ], aes(x=TILcut, y=value, fill=TILcut))+geom_boxplot()+scale_fill_manual(values=c("#bebada", brewer.pal(3, "Greens")))+facet_wrap(~variable2, drop=T, scale="free")+ggtitle("Immune decomposition in Abba set")
+```
+
+In order to test for differences between samples, we use a beta regression to test for differences in proportions.
+
+The test looks at the specific difference:
+
+Proportion ~ Cell Type 
+
+given  Cell Type, TIL proportion (L, M, H in reference to normal) and an interaction term between the two.
+
+Overall, there is a difference for most cell types, including B cells, CD8 , CD4, NK cells, monocytes, macrophages, eosinophils and neutrophils.
+
+```{r}
+acibmelt2=acibmelt
+acibmelt2$value[which(acibmelt2$value==0)]=0.0001
+
+# also need to group specific types together
+cnew=acast(acibmelt2[ ,c("variable2", "X", "value")], variable2~X, sum)
+cnew2=melt(cnew)
+cnew2$TILcut=acibmelt2$TILcut[match(cnew2$Var2, acibmelt2$X)]
+cnew2$type=acibmelt2$type[match(cnew2$Var2, acibmelt2$X)]
+
+#model1=betareg(value~variable+type+ variable*type, data=acibmelt2[acibmelt2$variable=="B.cells.naive", ])
+model2=betareg(value~Var1|Var1+TILcut+Var1*TILcut, data=cnew2)
+summary(model2)
+
+unL=levels(cnew2$Var1)
+a1x=matrix(NA, nrow=length(unL), ncol=4)
+for (i in 1:length(unL)){
+model2=betareg(value~TILcut, data=cnew2[cnew2$Var1==unL[i], ])
+a1x[i, ]=summary(model2)$coefficients$mean[ ,4]
+}
+
+rownames(a1x)=unL
+Mat2=matrix(p.adjust(a1x[ ,-1]), nrow=length(unL))
+rownames(Mat2)=unL
+
+```
+
+## Gene expression differences between normal-dcis
+
+
+```{r, results='hide'}
+AbbaRNARes=results(ddsAbba)
+
+# Run ssGSEA
+AbbaHST=gseaCode(data.matrix(AbbaRNARes[ ,c(2:6)]), pway=c2List, overlap = F)
+```
+
+We can perform this analysis for the Abba set (normal vs dcis).Note that the comparison is Tumor vs Normal, so negative enrichment scores indicate higher expression in the tumor whereas positve enrichment is higher expression in normals. 
+
+Below, we plot the top 15 terms in immune, cancer, ECM and metasbolism shows the following differences. 
+
+|Terms | DCIS | Normal
+|------|-------|-------|
+|Immune| IL5, IL3, IL6, STAT3 | TCR, Thelper, TCApopotosis, BCR signalling |
+|Cancer | WNT, MAPK, AKT, EGFR, PIK3CA, NOTCH, PTEN | - |
+|ECM| junction organisation, laminins, ECM pathways, integrins | proteoglycans, keratin sulfate degradation|
+|Metabolism | RNA syn, glycolysis, cholesterol, purine catbolism, mitochondria | starch sucrose, glucuronidation, ascorbate metabolism|
+
+```{r, fig.height=8}
+PWayMap=AbbaHST@result$GSEA.results$pway
+PWayMap2=PWayMap[  which(PWayMap[ ,3]<0.05), ]
+PWayMap2Annot=TermSelectionMap(rownames(PWayMap2))
+
+immidx=which(PWayMap2Annot[ ,3]==1)
+canceridx=which(PWayMap2Annot[ ,5]==1)
+ECMidx=which(PWayMap2Annot[ ,7]==1)
+Metabidx=which(PWayMap2Annot[ ,6]==1)
+
+par(mfrow=c(2,2), oma=c(0,5, 0,0))
+
+barplot(PWayMap2[ immidx[1:15],1], main="immune terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
+barplot(PWayMap2[ canceridx[1:15],1], main="cancer terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
+barplot(PWayMap2[ ECMidx[1:15],1], main="ECM terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
+barplot(PWayMap2[ Metabidx[1:15],1], main="Metab terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
+```
+
+## ssGSEA
+
+To obtain an idea of the variability in immune signalling in each sample, we use the gsva package to compute ssGSEA scores for the following signatures:
+
+* IFNG signalling (Wolf signature)
+* Wound healing (Chang signature)
+* Macrophage (Beck signature)
+* Lymphocyte (Calabro signature)
+* TGFB(Teschendorf)
+* Activation (Pardoll)
+* Dysfunction (Pardoll)
+* Naive (Tirosh signature)
+
+Below are the scores for the Abbaset, stratified by subtype. Blue indicates normal samples, red indicates ER+ (Luminal B), green are Basal-like, green Her2+ and purple ER+ (Luminal A)
+
+```{r}
+## if not already run:
+gsList=list()
+for (i in 1:length(Exp2List)){
+gsList[[i]]=GeneSet(Exp2List[[i]], setName = names(Exp2List)[i], geneIdType=SymbolIdentifier())
+}
+
+ImmSig=GeneSetCollection(gsList)
+Imm2=gsva(log2(data.matrix(TPMAbba+0.01)), ImmSig, mx.diff=TRUE, method="ssgsea", verbose=FALSE, parallel.sz=1, ssgsea.norm=T)
+
+ColSideColors=factor(substr(colnames(TPMAbba), 1, 1))
+ColSideColorsB=AbbaClin$ITIL[match(colnames(TPMAbba), AbbaClin$SampleID)]
+ColSideColorsB[which(ColSideColorsB=="-")]=NA
+ColSideColorsB=as.character(cut(as.numeric(ColSideColorsB), c(-5, 15, 35, 70), brewer.pal(3, "Greens")))
+
+# subtype information
+ColSideColorsC=AbbaClin$`PAM50 call`[match(colnames(TPMAbba), AbbaClin$SampleID)]
+
+colI=as.character(infoTable2$Color_group_2)
+
+ImmRec=gsva(log2(data.matrix(TPMtable2+0.01)), ImmSig, mx.diff=TRUE, method="ssgsea", verbose=FALSE, parallel.sz=1, ssgsea.norm=T)
+
+par(oma=c(0, 0, 0, 7))
+heatmap.2(Imm2[-c(6:7, 13), ], col=RdBu[11:1], trace="none", scale="none", symbreaks = T,  ColSideColors = as.character(as.numeric(factor(ColSideColorsC))), main="Abbaset")
+```
+
+We see that compared to the normals, the DCIS have enrichment of multiple signatures: eg. IFNG, lymphocyte infiltration, macrophage, activated pathways. Overall, this does not seem specific for any response, and includes both activated as well as dysfunctional signatures.
+
+
+```{r}
+heatmap.2(ImmRec[c(8, 5, 11, 14, 10,12,9,1, 3, 4, 2) ,-c(7:10)], col=RdBu[11:1], trace="none", Rowv = NA, scale="none", symbreaks = T,  ColSideColors = colI[-c(7:10)], main="recurrence set")
+```
+
+
+The recurrence set shows higher immune activation in  case 8 compared to the other samples, but also an enrichment for IFNG signalling in 8IDC and 2IDC. 
+
+
+```{r, eval=F}
+## if not already run:
+
+ImmSig=GeneSetCollection(gsList)
+Imm2=gsva(log2(data.matrix(TPMAbba+0.01)), ImmSig, mx.diff=TRUE, method="ssgsea", verbose=FALSE, parallel.sz=1, ssgsea.norm=T)
+
+ColSideColors=factor(substr(colnames(TPMAbba), 1, 1))
+ColSideColorsB=AbbaClin$ITIL[match(colnames(TPMAbba), AbbaClin$SampleID)]
+ColSideColorsB[which(ColSideColorsB=="-")]=NA
+ColSideColorsB=as.character(cut(as.numeric(ColSideColorsB), c(-5, 15, 35, 70), brewer.pal(3, "Greens")))
+
+par(oma=c(0, 0, 0, 7))
+heatmap.2(Imm2[-c(6,7, 13), ], col=RdBu[11:1], trace="none", scale="none", symbreaks = T,  ColSideColors = ColSideColorsB)
+
+```
+
+In the Abba cohort, test for significant differences between the normals vs DCIS using a t-test and adjust for multiple testing using fdr:
+
+```{r}
+typeA=substr(colnames(Imm2), 1, 1)
+ssAbbaP=sapply(1:nrow(Imm2), function(x) t.test(Imm2[x, ]~typeA)$p.value)
+ssAbbaP2=p.adjust(ssAbbaP, "fdr")
+names(ssAbbaP2)=rownames(Imm2)
+ssAbbaP2
+```
+
+`r names(ssAbbaP2)[which(ssAbbaP2<0.05)]` pathways are significantly different between Normal and DCIS

@@ -1,0 +1,185 @@
+## GSEA analysis
+
+Although there are differences in mutations and CNVs across the different samples, they may point to the same pathways being abberrated. To determine which pathways could be impacted by genetic changes in DCIS to IDC, we can perform GSEA based on genetic aberrations and compare it to differences in expressed pathways in the Abba cohort. 
+
+The input into a GSEA is the sum of the number of patients with abberrations in each gene. 
+
+```{r, results='hide', message=F}
+
+## All aberrations
+Lgl=LCNVsummGain+LCNVsummLoss
+names(Lgl)=gene_annot$Gene[match(rownames(dcis_logr_data), gene_annot$EntrezID)]
+
+hits=names(Lgl)[which(Lgl>2)]
+
+LesurfPathways=gseaCode(Lgl, hits=hits, pway = c2List, overlap = T, GSEA = T)
+
+Lres=LesurfPathways@result$GSEA.results$pway
+LesurfPathways<-HTSanalyzeR2::appendGSTerms(LesurfPathways, msigdbGSCs="pway")
+
+LresGS=rownames(Lres)[which(Lres[ ,3]<0.1)]
+
+#LesurfPathways<-HTSanalyzeR2::appendGSTerms(LesurfPathways, msigdbGSCs="pway")
+```
+
+
+```{r, results='hide', message=F}
+AGsumm=table(unlist(sapply(AAllGenes, function(x) as.character(x$Hugo_Symbol ))))
+CNVMod=lapply(AbbaGRanges, function(x) x[which(x$call!=0)])
+intVals=lapply(CNVMod, function(x) findOverlaps(tx37, x, type="within"))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+
+GIdx=lapply(hitIdx, function(x) unique(as.character(tx37$HUGO[x])))
+GIdx2=table(unlist(GIdx))
+# 
+# idx3=match(names(AGsumm), names(GIdx2))
+# GIdx2[na.omit(idx3)]=AGsumm[which(!is.na(idx3))]+GIdx2[na.omit(idx3)]
+
+GMat=matrix(0, nrow=length(gene_annot$Gene), ncol=2)
+rownames(GMat)=gene_annot$Gene
+a1=match(names(GIdx2), rownames(GMat))
+GMat[na.omit(a1),1]=GIdx2[-which(is.na(a1))]
+a2=match(names(AGsumm), rownames(GMat))
+GMat[na.omit(a2),2]=AGsumm[-which(is.na(a2))]
+
+GMatB=rowSums(GMat)
+names(GMatB)=rownames(GMat)
+
+phenList=GMatB
+hits=names(phenList)[which(phenList>0)]
+
+AbbaPathways=gseaCode(phenList, hits=hits, pway = c2List, overlap = T, GSEA = T)
+AbbaPathways<-HTSanalyzeR2::appendGSTerms(AbbaPathways, msigdbGSCs="pway")
+
+
+Ares=AbbaPathways@result$GSEA.results$pway
+
+AbbaGS=rownames(Ares)[ which(Ares[ ,3]<0.1)]
+```
+
+
+```{r,results='hide', message=F}
+RSumm=table(unlist(sapply(AllGenes, function(x) as.character(x$Hugo_Symbol ))))
+
+CNVMod=lapply(CNVRecGRanges, function(x) x[which(x$call!="0")])
+intVals=lapply(CNVMod, function(x) findOverlaps(tx37, x, type="within"))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+
+GIdx=lapply(hitIdx, function(x) unique(as.character(tx37$HUGO[x])))
+GIdx2=table(unlist(GIdx))
+
+#idx3=match(names(RSumm), names(GIdx2))
+#GIdx2[na.omit(idx3)]=RSumm[which(!is.na(idx3))]+GIdx2[na.omit(idx3)] ## why are we summing the two?
+
+RMat=matrix(0, nrow=length(gene_annot$Gene), ncol=2)
+rownames(RMat)=gene_annot$Gene
+a1=match(names(GIdx2), rownames(RMat))
+RMat[na.omit(a1),1]=GIdx2[-which(is.na(a1))]
+a2=match(names(RSumm), rownames(RMat))
+RMat[na.omit(a2),2]=RSumm[-which(is.na(a2))]
+
+RMatB=rowSums(RMat)
+names(RMatB)=rownames(RMat)
+
+phenList=RMatB
+hits=names(phenList)[which(phenList>0)]
+
+RecPathways=gseaCode(phenList, hits=hits, pway = c2List, overlap = T, GSEA = T)
+
+RecPathways<-HTSanalyzeR2::appendGSTerms(RecPathways, msigdbGSCs="pway")
+
+Rres=RecPathways@result$GSEA.results$pway
+
+RecGS=rownames(Rres)[ which(Rres[ ,3]<0.1)]
+```
+
+Check the Abba set for enrichment score for these pathways when comparing normals with DCIS?
+
+In the Lesurf set there are `r length(LresGS)` pathways, in the Abba set `r length(AbbaGS)` and the recurrence set `r length(RecGS)` pathways which seem to be implicated. 
+
+
+
+```{r,results='hide', message=F}
+RNAresAbba2=AbbaHST@result$GSEA.results$pway
+RNAresAbba=RNAresAbba2[ which(RNAresAbba2[ ,3]<0.1),]
+```
+
+In the RNA-seq data comapring normal to DCIS, there are `r nrow(RNAresAbba)` pathways implicated.
+We can combine all together and create a network diagram:
+
+```{r}
+allSets=unique(c(RecGS, AbbaGS, LresGS))
+mxA=intersect(RecGS, AbbaGS)
+mxB=intersect(mxA, LresGS)
+mxC=intersect(mxB, rownames(RNAresAbba))
+
+mx3=setdiff(rownames(Ares), mxB)
+
+AbbaPathways2=AbbaPathways
+AbbaPathways2@result$GSEA.results$pway[match(mx3, rownames(AbbaPathways2@result$GSEA.results$pway)),4 ]=1
+
+library(HTSanalyzeR)
+ax1=viewEnrichMap(AbbaPathways2, gscs="pway", allSig=TRUE, displayEdgeLabel=F)
+edge_attr(ax1)$width=edge_attr(ax1)$width-2
+# change color to the term type
+ATerms=TermSelectionMap(vertex_attr(ax1)$label)
+Col2=rep("black", nrow(ATerms))
+for (i in 1:ncol(ATerms)){
+  Col2[which(ATerms[ ,i]==1)]=palette()[i]
+}
+vertex_attr(ax1)$color=Col2
+
+
+# change the size based on the number of genes implicated in each pathway? or average enrichment score
+a1=AbbaPathways@result$GSEA.results$pway[ match(rownames(ATerms), AbbaPathways@result$GSEA.results$pway[ ,1]),2]
+b1=Lres[match(rownames(ATerms), rownames(Lres)),1 ]
+c1=Rres[match(rownames(ATerms), rownames(Rres)),2 ]
+
+Size2=rowMeans(cbind(a1, b1, c1))
+
+vertex_attr(ax1)$size=Size2*10  
+
+# change the name based on the labels
+TermLabs=vertex_attr(ax1)$label
+TermLabs=sapply(strsplit(TermLabs, "REACTOME_"), function(x) x[length(x)])
+TermLabs=sapply(strsplit(TermLabs, "NABA_"), function(x) x[length(x)])
+TermLabs=sapply(strsplit(TermLabs, "KEGG_"), function(x) x[length(x)])
+TermLabs=sapply(strsplit(TermLabs, "BIOCARTA_"), function(x) x[length(x)])
+TermLabs=gsub( "_", " ", TermLabs)
+TermLabs=tolower(TermLabs)
+# After a space or the first letter capitalize
+vertex_attr(ax1)$label=TermLabs
+
+# collect the node information
+#pdf(file="rslt/Routput//ax1_gsea_cn_mut.pdf", width=7, height=7)
+plot(ax1)
+#dev.off()
+
+#TermLabs
+```
+
+
+```{r}
+save(ax1, Ares, Rres, Lres, RNAresAbba2,AbbaPathways2, file="rslt/gsea.Rdata")
+
+allTerms=unique(c(rownames(RNAresAbba2), rownames(Ares), rownames(Lres), rownames(Rres)))
+
+m1=match(allTerms, rownames(RNAresAbba2))
+m2=match(allTerms, rownames(Rres))
+m3=match(allTerms, rownames(Lres))
+m4=match(allTerms, rownames(Ares))
+
+
+enrichTab=cbind(Abba=Ares[m4, c(2,4)],
+                Lesurf=Lres[m3,c(1,3) ], 
+                Recurrence=Rres[m2,c(2,4) ], 
+                AbbaRNA=RNAresAbba2[ m1, c(1,3)])
+write.csv(enrichTab, file=sprintf("rslt/TableS2_test_Genetic_Aberrated_Pathways_%s.csv", Sys.Date()))
+
+head(enrichTab[match(head(mxC), rownames(enrichTab)), ])
+
+```
+
+We see that some common pathways include notch signalling, ECM modeling and NK cell cytotoxicity. This output has been written to file as Table S2.
