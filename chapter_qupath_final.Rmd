@@ -72,10 +72,10 @@ for (i in 1:NROI){
   bd[[i]]=ripras(QPs[[idx]]$CentroidX[as.numeric(ROIlist[[i]])] , QPs[[idx]]$CentroidY[as.numeric(ROIlist[[i]])])
 }
 
-plot(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY, col=QPs[[idx]]$CellType, pch='.')
+plot(QPs[[idx]]$CentroidX, QPs[[idx]]$CentroidY, col=QPs[[idx]]$CellType, pch='.', xlim=c(2000, 6000), ylim=c(17000, 20000))
 for (i in 1:length(bd)){
   polygon(bd[[i]]$bdry[[1]]$x, bd[[i]]$bdry[[1]]$y)
-  text(mean(bd[[i]]$xrange), mean(bd[[i]]$yrange), i)
+ # text(mean(bd[[i]]$xrange), mean(bd[[i]]$yrange), i)
 }
 
 # Create a mask for later analysis
@@ -132,10 +132,6 @@ ggplot(SummData2melt, aes(x=Sample2, y=value, fill=variable))+geom_bar(stat="ide
 
 For this study, we focus only on DCIS regions within a clincailly diagnosed speciment DCIS, and IDC regions within a clinically diagnosed IDC specimen. The proportions of these different cells are shown below:
 
-
-
-<span style="color:red"> Create a bar plot here </span>
-
 ```{r, fig.height=6}
 rmX=grep("dcis", SummData2$Sample)
 rmY=grep("idc", SummData2$Case)
@@ -148,6 +144,30 @@ colnames(SD3)=colnames(SD2)[3:5]
 rownames(SD3)=t(SD2[ ,2])
 barplot(t(SD3), col=c("#fdb462", "#984ea3","#8dd3c7"))
 
+```
+
+Combine the over data in one plot and computer differences in proportion
+
+```{r}
+SD3$sample=rownames(SD3)
+SD3$tumor=substr(rownames(SD3), 2, 4)
+SD3$case=substr(rownames(SD3), 1, 1)
+sd4=melt(SD3)
+ggplot(sd4, aes(x=tumor, y=value, col=case))+geom_point()+geom_line(aes(group=case))+facet_grid(~variable)
+
+# for each individual pair
+Ptets=sapply(1:6, function(x) prop.test(t(SD2[(x*2-1):(x*2), 3 ]), rowSums(SD2[(x*2-1):(x*2), 3:5 ])))
+
+# # proportion test
+# AllSamples=prop.test(t(SD2[, 3 ]), rowSums(SD2[, 3:5 ]))
+
+# by beta regression?
+p_test=betareg(Immune~tumor+case, data=SD3[SD3$case!=1, ])
+p_test=betareg(Tumor~tumor+case, data=SD3[SD3$case!=1, ])
+p_test=betareg(Stroma~tumor+case, data=SD3[SD3$case!=1, ])
+# paired t test
+t.test(SD3$Immune[SD3$tumor=="dci"][1:5],SD3$Immune[SD3$tumor=="idc"][1:5], paired=T, alternative="greater")
+t.test(SD3$Tumor[SD3$tumor=="dci"][1:5],SD3$Tumor[SD3$tumor=="idc"][1:5], paired=T, alternative="greater")
 ```
 
 ## Spatial statistics: based on nearest neighbour distances
@@ -275,6 +295,36 @@ legend("topright", legend=roiNames, col=c(1:NROI), pch=19)
 }
 ```
 
+
+Compare nearest neighbour distances for the different cases: 
+
+* immune - immune
+* immune - stroma
+* immune - tumor
+
+```{r}
+load("data/RecurrenceCohort/qupath/auc_knn_region_segmented.RData")
+Inputs1=sapply(OutputKnnAUC, function(x) x[ ,1])
+Inputs2=sapply(OutputKnnAUC, function(x) x[ ,2])
+Inputs3=sapply(OutputKnnAUC, function(x) x[ ,3])
+
+par(mfrow=c(1,3))
+boxplot(Inputs2[1, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3), main="immune", col=dcisidcCol, ylab="AUC scores 50um")
+boxplot(Inputs2[2,-c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3), main="stroma",col=dcisidcCol)
+boxplot(Inputs2[3,-c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3), main="tumor", col=dcisidcCol)
+
+# wilcox test here
+wilcox.test(Inputs2[3, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3), main="immune",  ylab="AUC scores 50um")
+wilcox.test(Inputs2[1, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3), main="immune",  ylab="AUC scores 50um")
+wilcox.test(Inputs2[2, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3), main="immune",  ylab="AUC scores 50um")
+
+# can also report beta-regression score
+summary(betareg(Inputs2[3, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3)))#, main="immune",  ylab="AUC scores 50um")
+summary(betareg(Inputs2[2, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3)))
+summary(betareg(Inputs2[1, -c(1:7)]~substr(colnames(Inputs1)[-c(1:7)],2,3)))
+```
+
+
 ### The interacting fraction
 
 We can define the interacting fraction by drawing a vertical line at a given distance R, and finding the intersection with the y-axis in the CDF plot. I.e. this is the porportion of immune cells which are within a distance R of a tumor cell. 
@@ -352,6 +402,14 @@ Prop2Melt$Pat=substr(Prop2Melt$Var2, 1, 1)
 Prop2Melt$Reg=substr(Prop2Melt$Var2, 2, 2)
 
 ggplot(Prop2Melt, aes(x=Reg, y=value, fill=Var1))+geom_bar(stat="identity", position="dodge")+facet_grid(~Pat)+ggtitle("Proportion of cells within interacting distance")+scale_fill_discrete(name = "Sample", labels = c("tumor (dcis idc)", "Normal"))+xlab("Region (DCIS or IDC HE slide")+ylab("Proportion")
+
+ggplot(Prop2Melt[Prop2Melt$Var1=="PropIT", ], aes(x=Reg, y=value, col=Pat))+geom_point()+geom_line(aes(group=Pat))+ggtitle("Proportion of cells within interacting distance")+xlab("Region (DCIS or IDC HE slide")+ylab("Proportion")
+
+
+test1=betareg(value~Reg+Pat, data=Prop2Melt[Prop2Melt$Var1=="PropIT", ])
+
+t.test(Prop2Melt[Prop2Melt$Var1=="PropIT" & Prop2Melt$Pat!=1 , "value"] ~
+         Prop2Melt[Prop2Melt$Var1=="PropIT"& Prop2Melt$Pat!=1, "Reg"], paired=T)
 ```
 
 
@@ -581,6 +639,11 @@ MHmelt3=MHmelt2[which(MHmelt2$type=="rm_imm_str0"), ]
 ggplot(MHmelt3, aes(x=class, y=value, col=sampType))+geom_point()+facet_grid(~nam)+geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)+
   theme(axis.text.x = element_text(angle = 90, hjust = 1))+scale_color_manual(values=c("#E9A3C9", "#C51B7D", "#B5B2CC"))
 
+
+#+scale_color_manual(values=c("#E9A3C9", "#C51B7D", "#B5B2CC"))
+
+
+
 ```
 
 We can repeat the same analysis looking at immune-stroma mixing to see if this explains some of the spatial patterns that emerge. 
@@ -593,9 +656,59 @@ MHmelt2$class=substr(MHmelt2$L1, 2, 2)
 MHmelt2$sampType=substr(MHmelt2$comp, 1, 1)
 MHmelt2=MHmelt2[-which(MHmelt2$class=="I" & MHmelt2$sampType=="d"), ]
 #MHmelt2$sampType2=paste(MHmelt2$comp, MHmelt$type)
-MHmelt3=MHmelt2[which(MHmelt2$type=="rm_imm_str0"), ]
+MHmelt2=MHmelt2[which(MHmelt2$type=="keep all"), ]
+MHmelt2$value[MHmelt2$L1=="1IDC.RData"]=NA
 
-
-ggplot(MHmelt3, aes(x=class, y=value, col=sampType))+geom_point()+facet_grid(~nam)+geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)+
+ggplot(MHmelt2, aes(x=class, y=value, col=sampType))+geom_point()+facet_grid(~nam)+geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)+
   theme(axis.text.x = element_text(angle = 90, hjust = 1))+scale_color_manual(values=c("#E9A3C9", "#C51B7D", "#B5B2CC"))
+
+
+# plot stroma/immune mixing
+plot(MHmelt3$value, MHmelt2$value, col=c(dcisidcCol, "purple")[factor(MHmelt2$sampType)], pch=19,
+     xlab="immune-tumor mixing", ylab="immune-stroma mixing")
+
+# add the two metrics together and determine the contribution of each to the model?
+MHmodel1=data.frame(it=MHmelt3$value, is=MHmelt2$value, class=MHmelt3$sampType)
+a1=glm(as.numeric(class)~it, data=MHmodel1[MHmodel1$class!="n", ])
+
+ggplot(MHmelt3, aes(x=sampType, y=value, col=nam))+geom_boxplot(aes(col="black"))+
+  geom_point(position = position_jitterdodge(jitter.width = 0, dodge.width =0.3), aes(color=nam))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(MHmelt2, aes(x=sampType, y=value, col=nam))+geom_boxplot(aes(col="black"))+
+  geom_point(position = position_jitterdodge(jitter.width = 0, dodge.width =0.3), aes(color=nam))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# do t.tests to compare different populations
+# ignore the normal cases
+wilcox.test(MHmelt3$value[which(MHmelt3$sampType!="n")]~MHmelt3$sampType[which(MHmelt3$sampType!="n")])
+wilcox.test(MHmelt2$value[which(MHmelt2$sampType!="n")]~MHmelt2$sampType[which(MHmelt2$sampType!="n")])
+# ignore dcis samples
+wilcox.test(MHmelt3$value[which(MHmelt3$sampType!="d")]~MHmelt3$sampType[which(MHmelt3$sampType!="d")])
+wilcox.test(MHmelt2$value[which(MHmelt2$sampType!="d")]~MHmelt2$sampType[which(MHmelt2$sampType!="d")])
+# ignore idc samples
+wilcox.test(MHmelt3$value[which(MHmelt3$sampType!="i")]~MHmelt3$sampType[which(MHmelt3$sampType!="i")])
+wilcox.test(MHmelt2$value[which(MHmelt2$sampType!="i")]~MHmelt2$sampType[which(MHmelt2$sampType!="i")])
+
+```
+
+
+```{r}
+#Also try stroma - tumor mixing: non-informative, similar to imm-tum mixing
+MHmeltC=MHmelt[grep("str-tum", MHmelt$comp), ]
+MHmeltC$nam=substr(MHmeltC$L1, 1, 1)
+MHmeltC$class=substr(MHmeltC$L1, 2, 2)
+MHmeltC$sampType=substr(MHmeltC$comp, 1, 1)
+MHmeltC=MHmeltC[-which(MHmeltC$class=="I" & MHmeltC$sampType=="d"), ]
+#MHmelt2$sampType2=paste(MHmelt2$comp, MHmelt$type)
+MHmeltC=MHmeltC[which(MHmeltC$type=="rm_imm_str0"), ]
+#MHmelt2$value[MHmelt2$L1=="1IDC.RData"]=NA
+
+ggplot(MHmeltC, aes(x=class, y=value, col=sampType))+geom_point()+facet_grid(~nam)+geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+scale_color_manual(values=c("#E9A3C9", "#C51B7D", "#B5B2CC"))
+
+
+# plot stroma/immune mixing
+plot(MHmelt3$value, MHmeltC$value, col=c("pink", "red", "purple")[factor(MHmelt2$sampType)], pch=19,
+     xlab="immune-tumor mixing", ylab="immune-stroma mixing")
 ```

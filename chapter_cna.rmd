@@ -81,6 +81,84 @@ panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))+
 
 Across the three cohorts, we see recurrent gains at 1q, 8q, 17 for example, as well as losses at 8p, 16q. These have been previously been implicated in breast cancer in both DCIS as well as IDC.
 
+## Compare similarities between the samples
+
+```{r}
+load("data/exome_regions_profiled.RData")
+
+intReg=lapply(1:12, function(x) findOverlaps(ExomeRanges, CNVRecGRanges[[x]]))
+CNVvals2sub=lapply(intReg, function(x) subjectHits(x))
+CNVcallsB=lapply(1:12, function(x) (CNVRecGRanges[[x]]$call[CNVvals2sub[[x]]]))
+## summary of the number of regions called as gained or loss
+sapply(CNVcallsB, table)
+#sapply(CNVcallsB, length)
+
+## overlap the regions directly?
+OverlapRegs=sapply(1:6, function(x) intersect(queryHits(intReg[[2*x-1]]), queryHits(intReg[[2*x]])))
+
+# weight the above by the width of each 
+
+## look at all the intersecting regions, obtain the CN values and correlate against each other
+intCommon=intersect(intersect(OverlapRegs[[1]], OverlapRegs[[2]]), OverlapRegs[[3]])
+intCommon2=intersect(intersect(OverlapRegs[[5]], OverlapRegs[[4]]), OverlapRegs[[6]])
+intCommon=intersect(intCommon, intCommon2)
+
+CNVcallsAll=lapply( 1:12, function(x) (CNVRecGRanges[[x]][subjectHits(intReg[[x]])[match(intCommon, queryHits(intReg[[x]]))]]))
+
+Tab1=sapply(CNVcallsAll,function(x) x$total_copy_ratio)
+TestA=cor(Tab1, method="spearman")
+colnames(TestA)=names(CNVRecGRanges)
+
+Tab2=sapply(CNVcallsAll,function(x) ifelse(x$call=="-",(-1), ifelse(x$call=="+", 1, 0))) 
+#Tab2B=
+TestB=matrix(NA, nrow=12, ncol=12)
+TestB2=matrix(NA, nrow=12, ncol=12)
+WeightFn=width(ExomeRanges)[intCommon]
+WeightSum=sum(WeightFn)
+
+for (i in 1:12){
+  for (j in 1:12){
+    a1=table(Tab2[,i], Tab2[ ,j])
+    TestB[i,j]=sum(diag(a1))/sum(a1)
+    mx=which(Tab2[,i]==Tab2[,j])
+    TestB2[i, j]=sum(WeightFn[mx])/WeightSum
+  }
+}
+
+#TestB=cor(Tab2, method="spearman")
+colnames(TestB2)=names(CNVRecGRanges)
+heatmap.2(TestB2, scale="none", Rowv = NA, Colv = NA, col=brewer.pal(9, "Blues"), trace="none")
+
+```
+
+Here, we see the proportion which is similar bewtween DCIS and IDC:
+
+Cases | similarity
+------|------------
+1 | `r TestB2[1, 2]`
+2 |`r TestB2[3, 4]`
+3 |`r TestB2[5, 6]`
+5 |`r TestB2[7, 8]`
+8 |`r TestB2[9, 10]`
+9 |`r TestB2[11, 12]`
+
+
+```{r}
+heatmap.2(TestA, scale="none", Rowv = NA, Colv = NA, col=RdBu[11:1], trace="none")
+
+TestA
+```
+
+Cases | similarity (Corr)
+------|------------
+1 | `r TestA[1, 2]`
+2 |`r TestA[3, 4]`
+3 |`r TestA[5, 6]`
+5 |`r TestA[7, 8]`
+8 |`r TestA[9, 10]`
+9 |`r TestA[11, 12]`
+
+
 ## Breast cancer specific gains and losses:
 
 Below, we interrogate copy number changes specifically at known breast cancer oncogenic and tumor suppressor sites. For example, MYC and ERBB2 are commonly reported gain sites whereas PTEN, BRCA1/2 are often lost. Do any of these changes appear as early as in DCIS and does it occur in a subtype-specific fashion?

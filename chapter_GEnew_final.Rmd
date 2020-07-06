@@ -34,9 +34,19 @@ barplot(AbbaRPKM, beside=T, las=2, main="Abba RPKM", ylab="Shannon diversity")
 barplot(Abbadiv, beside=T, las=2, main="Abba TPM", ylab="Shannon diversity")
 ```
 
-## CIBERSORT
+## Inferring immune cell types from RNA data
 
-[CIBERSORT](https://cibersort.stanford.edu/) is a deconvolution method which infers the proportion of different immune cells within a bulk tissue sample. The input was TPM counts from RNAseq data. From this data, we observe
+[CIBERSORT](https://cibersort.stanford.edu/) is a deconvolution method which infers the proportion of different immune cells within a bulk tissue sample. We compared the outcome of this to other
+methods including TIMER, quanTIseq, xCell, MCP-counter and EPIC using the [TIMER website](http://timer.cistrome.org/).
+
+Note that the following report a proportion, which sums to 1:
+CIBERSORT, QUANTISEQ, EPIC
+
+
+Whereas the following report an enrichment score:
+CIBERSORT-ABS, XCELL
+
+The input was TPM counts from RNAseq data. From this data, we observe
 
 * high number of macrophages in stromal samples (marked with an extra S at the end of the name)
 * lower macrophages in 8DCIS compared to 8IDC
@@ -70,6 +80,102 @@ Whereas, if we resolve the subpopulations of macrophages, T cells etc, we see th
 ggplot(mData, aes(x=Input.Sample, y=value, fill=variable))+geom_bar(stat="identity")+scale_fill_manual(values=colsIn2)+facet_grid(~type, drop=T, scales = "free_x", space = "free")
 ```
 
+Comparing this result with other methods:
+
+
+
+
+```{r}
+timerRes=read.csv("data/RecurrenceCohort/expression/estimation_matrix_recurrence_again.csv", row.names = 1)
+
+# compare the concordance between B cell outputs:
+# collect the following rows:
+colRows=c("^B cell_", "T cell CD4\\+_", "T cell CD8\\+_", "Macrophage_", "Neutrophil_", "Myeloid dendritic cell_", "Tregs" )
+
+x1=grep("EPIC", rownames(timerRes))
+timerRes[x1[-length(x1)], ]=t(t(timerRes[x1[-length(x1)], ])/colSums(timerRes[x1[-length(x1)], ]))
+
+x1=grep("QUANTISEQ", rownames(timerRes))
+timerRes[x1[-length(x1)], ]=t(t(timerRes[x1[-length(x1)], ])/colSums(timerRes[x1[-length(x1)], ]))
+
+
+Rvals=unlist(sapply(colRows, function(x) grep(x, rownames(timerRes))))
+BmatT=timerRes[Rvals, ]
+BmatT$CellType=sapply(strsplit(rownames(BmatT), "_"), function(x) x[1])
+BmatT$Method=sapply(strsplit(rownames(BmatT), "_"), function(x) x[2])
+
+
+Rec_decon=melt(BmatT)
+
+Rec_decon$Type=substr(Rec_decon$variable, 3, 7)
+Rec_decon$Case=substr(Rec_decon$variable, 2, 2)
+
+ggplot(Rec_decon, aes(x=variable, y=value, fill=variable))+geom_bar(stat="identity")+facet_wrap(~CellType+Method, scale="free_y")
+
+Rec_decon$value[Rec_decon$value==0]=0.001
+
+betaregMatrix=matrix(NA, ncol=3, nrow=length(unique(Rec_decon$CellType)))
+colnames(betaregMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ")
+rownames(betaregMatrix)=unique(Rec_decon$CellType)
+for (i in 1:nrow(betaregMatrix)){
+  for (j in 1:ncol(betaregMatrix)){
+    a1=tryCatch({betareg(value~Type, data=Rec_decon[Rec_decon$Method==colnames(betaregMatrix)[j] &
+                                                          Rec_decon$CellType==rownames(betaregMatrix)[i] , ])}, error=function(e) {NA})
+    betaregMatrix[i,j]=tryCatch({summary(a1)$coefficients$mean[ 2, 4]}, error=function(e) {NA})
+  }
+}
+
+betaregMatrix2=matrix(p.adjust(betaregMatrix, "fdr"), ncol=3)
+
+betaregMatrix
+
+wilcoxRegMatrix=matrix(NA, ncol=4, nrow=length(unique(Rec_decon$CellType)))
+colnames(wilcoxRegMatrix)=c("CIBERSORT-ABS", "TIMER", "XCELL", "MCPCOUNTER")
+rownames(wilcoxRegMatrix)=unique(Rec_decon$CellType)
+for (i in 1:nrow(wilcoxRegMatrix)){
+  for (j in 1:ncol(wilcoxRegMatrix)){
+    a1=tryCatch({glm(value~Type, data=Rec_decon[Rec_decon$Method==colnames(wilcoxRegMatrix)[j] &
+                                                          Rec_decon$CellType==rownames(wilcoxRegMatrix)[i], ])}, error=function(e) {NA})
+    wilcoxRegMatrix[i,j]=tryCatch({summary(a1)$coefficients[ 2, 4]}, error=function(e) {NA})
+  }
+}
+
+AllP=cbind(betaregMatrix, wilcoxRegMatrix)
+AllPadjust=sapply(1:ncol(AllP), function(x) p.adjust(AllP[ , x], "fdr"))
+colnames(AllPadjust)=c(colnames(betaregMatrix), colnames(wilcoxRegMatrix))
+
+nm2=melt(AllPadjust)
+nm2$value=ifelse(nm2$value<0.1, "*", NA)
+
+Rec_decon$sig=nm2$value[match(paste(Rec_decon$CellType, Rec_decon$Method), paste(nm2$Var1, nm2$Var2))]
+
+ggplot(Rec_decon, aes(x=Type, y=value, col=Case, label=sig))+geom_point()+geom_line(aes(group=Case))+facet_wrap(~CellType+Method, scale="free_y")+
+  geom_text(nudge_x = 0.5, col="black")+scale_color_manual(values=c("#B79F00", "#00BA38", "#619CFF", "#A58AFF"))
+
+```
+
+View the paired colors for recurrence set: CIBERSORT inference
+
+```{r, eval=F}
+timerRes2=timerRes[grep("CIBERSORT$", rownames(timerRes)), ]
+colRows=c("^B cell_", "T cell CD4\\+_", "T cell CD8\\+_","NK cell_", "Monocyte_", "Macrophage_", "Myeloid dendritic cell_", "Mast cell_", "Eosinophil_", "Neutrophil_" )
+
+
+Rvals=unlist(sapply(colRows, function(x) grep(x, rownames(timerRes2))))
+TabFinal=timerRes2[Rvals, ]
+rownames(TabFinal)[c(2:5, 7, 9)]=c("CD4", "CD8","Eneutro", "M0", "Madendritic", "NEosin")
+TabFinal$cell=rownames(TabFinal)
+
+
+mData=melt(TabFinal)
+mData$type=c(substr(mData$variable, 2, 6))
+#mData$type[which(mData$type=="IDCS"| mData$type=="DCISS")]="stroma"
+colsIn3=c("#66C2A5", "#FED976", "#FC4E2A", "#bdbdbd", "#FEEBE2", "#AE017E" ,"#5E4FA2" ,"#2171B5", "#BDD7E7" ,"#EFF3FF")
+
+
+ggplot(mData, aes(x=type, y=value, fill=cell))+geom_bar(stat="identity")+scale_fill_manual(values=colsIn3)+ggtitle("Immune decomposition in Recurrence set")
+```
+
 Repeating the same analysis for the Abba datset shows:
 
 * high number of macrophages in the DCIS
@@ -77,7 +183,7 @@ Repeating the same analysis for the Abba datset shows:
 * higher proportion of CD4 T cells, but not CD8
 * a reduced proportion in mast and dendritic cells involved in the innate immune system
 
-```{r}
+```{r, eval=F}
 AbbaCIB=read.csv("data/Abba2015/Abba_vsd_output_estimate_CIBERSORT.csv", header=T)
 m1=match(AbbaCIB$X, AbbaClin$run_accession)
 AbbaCIB$X=AbbaClin$SampleID[m1]
@@ -103,7 +209,7 @@ ggplot(acibmelt, aes(x=X, y=value, fill=variable))+geom_bar(stat="identity")+sca
 
 We also explored the frequency of each population when subsetting based on immune infiltration: Samples in the Abba set were categorised as low (between 0 to 15\% TILs), medium (15 - 35 \%) and high (35\% and higher). These were compared to the normal cases (in purple) below:
 
-```{r}
+```{r, eval=F}
 
 acibmelt$variable2=substr(acibmelt$variable, 1, 3)
 acibmelt$variable2[grep("CD8", acibmelt$variable)]="T.CD8"
@@ -137,7 +243,7 @@ given  Cell Type, TIL proportion (L, M, H in reference to normal) and an interac
 
 Overall, there is a difference for most cell types, including B cells, CD8 , CD4, NK cells, monocytes, macrophages, eosinophils and neutrophils.
 
-```{r}
+```{r, eval=F}
 acibmelt2=acibmelt
 acibmelt2$value[which(acibmelt2$value==0)]=0.0001
 
@@ -164,6 +270,286 @@ rownames(Mat2)=unL
 
 ```
 
+Compare the above to other methods:
+
+```{r}
+timerRes=read.csv("data/Abba2015/timer_estimation_matrix_abba_cohort.csv", row.names = 1)
+
+# compare the concordance between B cell outputs:
+# collect the following rows:
+colRows=c("^B cell_", "T cell CD4\\+_", "T cell CD8\\+_", "Macrophage_", "Neutrophil_", "Myeloid dendritic cell_", "Mast cell_", "Treg" )
+
+x1=grep("EPIC", rownames(timerRes))
+timerRes[x1[-length(x1)], ]=t(t(timerRes[x1[-length(x1)], ])/colSums(timerRes[x1[-length(x1)], ]))
+
+x1=grep("QUANTISEQ", rownames(timerRes))
+timerRes[x1[-length(x1)], ]=t(t(timerRes[x1[-length(x1)], ])/colSums(timerRes[x1[-length(x1)], ]))
+
+
+Rvals=unlist(sapply(colRows, function(x) grep(x, rownames(timerRes))))
+BmatT=timerRes[Rvals, ]
+BmatT$CellType=sapply(strsplit(rownames(BmatT), "_"), function(x) x[1])
+BmatT$Method=sapply(strsplit(rownames(BmatT), "_"), function(x) x[2])
+
+
+Abba_decon=melt(BmatT)
+Abba_decon$Type1=substr(Abba_decon$variable, 1, 1)
+
+Abba_decon$TIL=AbbaClin$ITIL[match(Abba_decon$variable, AbbaClin$SampleID)]
+Abba_decon$TIL[which(Abba_decon$TIL=="-")]=NA
+Abba_decon$TIL=as.numeric(Abba_decon$TIL)
+Abba_decon$TILcut=as.character(cut(Abba_decon$TIL, c(-5, 15, 35, 70), c("L", "M", "P")))
+Abba_decon$TILcut[grep("N", Abba_decon$variable)]="ab"
+Abba_decon$PAM50=AbbaClin$`PAM50 call`[match(Abba_decon$variable, AbbaClin$SampleID)]
+
+```
+
+For the above, we can test for differences between normal and tumor by a beta-regression model
+
+```{r}
+Abba_decon$value[which(Abba_decon$value==0)]=0.001
+
+betaregMatrix=matrix(NA, ncol=3, nrow=length(unique(Abba_decon$CellType)))
+colnames(betaregMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ")
+rownames(betaregMatrix)=unique(Abba_decon$CellType)
+betaregMatrixM=betaregMatrix
+betaregMatrixP=betaregMatrix
+
+for (i in 1:nrow(betaregMatrix)){
+  for (j in 1:ncol(betaregMatrix)){
+    a1=tryCatch({betareg(value~TILcut, data=Abba_decon[Abba_decon$Method==colnames(betaregMatrix)[j] &
+                                                          Abba_decon$CellType==rownames(betaregMatrix)[i] , ])}, error=function(e) {NA})
+    betaregMatrix[i,j]=tryCatch({summary(a1)$coefficients$mean[ 2, 4]}, error=function(e) {NA})
+    betaregMatrixM[i,j]=tryCatch({summary(a1)$coefficients$mean[ 3, 4]}, error=function(e) {NA})
+    betaregMatrixP[i,j]=tryCatch({summary(a1)$coefficients$mean[ 4, 4]}, error=function(e) {NA})
+    
+  }
+}
+
+betaregMatrix2=matrix(p.adjust(betaregMatrix, "fdr"), ncol=3)
+
+wilcoxRegMatrix=matrix(NA, ncol=7, nrow=length(unique(Abba_decon$CellType)))
+colnames(wilcoxRegMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ", "CIBERSORT-ABS", "TIMER", "XCELL", "MCPCOUNTER")
+rownames(wilcoxRegMatrix)=unique(Abba_decon$CellType)
+wilcoxRegMatrixM=wilcoxRegMatrix
+wilcoxRegMatrixP=wilcoxRegMatrix
+for (i in 1:nrow(wilcoxRegMatrix)){
+  for (j in 1:ncol(wilcoxRegMatrix)){
+    a1=tryCatch({glm(value~TILcut, data=Abba_decon[Abba_decon$Method==colnames(wilcoxRegMatrix)[j] &
+                                                          Abba_decon$CellType==rownames(wilcoxRegMatrix)[i], ])}, error=function(e) {NA})
+    wilcoxRegMatrix[i,j]=tryCatch({summary(a1)$coefficients[ 2, 4]}, error=function(e) {NA})
+    wilcoxRegMatrixM[i,j]=tryCatch({summary(a1)$coefficients[ 3, 4]}, error=function(e) {NA})
+    wilcoxRegMatrixP[i,j]=tryCatch({summary(a1)$coefficients[ 4, 4]}, error=function(e) {NA})
+  }
+}
+
+
+B1tab=cbind(rbind(betaregMatrix, betaregMatrixM, betaregMatrixP), 
+         rbind(wilcoxRegMatrix, wilcoxRegMatrixM, wilcoxRegMatrixP))
+
+rownames(B1tab)=paste(rownames(B1tab), rep(c("L", "M", "H"),each=7))
+B1adjust=sapply(1:ncol(B1tab), function(x) p.adjust(B1tab[ ,x], "fdr"))
+
+colnames(B1adjust)=colnames(B1tab)
+
+B1amelt=melt(B1adjust)
+B1amelt$value=ifelse(B1amelt$value<0.1, "*", NA)
+Abba_decon$sig=B1amelt$value[match(paste(Abba_decon$CellType, Abba_decon$TIL, Abba_decon$Method), paste(B1amelt$Var1, B1amelt$Var2))]
+
+x2=which(duplicated(Abba_decon[, c("CellType", "Method", "TIL")]))
+Abba_decon$sig[x2]=NA
+
+ggplot(Abba_decon, aes(x=TILcut, y=value, fill=TILcut, label=sig))+geom_boxplot()+facet_wrap(~CellType+Method, scales="free")+scale_fill_manual(values=c("#bebada", brewer.pal(3, "Greens")))+geom_text(nudge_x = 0.5, col="black")
+```
+
+Use a model to compare infiltration: this should be 
+
+Value ~ TILS + ER status
+
+```{r}
+Abba_decon$ERstatus="ER-"
+Abba_decon$ERstatus[grep("Lum", Abba_decon$PAM50)]="ER+"
+Abba_decon$ERstatus[Abba_decon$PAM50=="Normal"]="abs"
+
+
+Abba_decon$TIL[which(is.na(Abba_decon$TIL))]=0
+colnames(wilcoxRegMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ", "CIBERSORT-ABS", "TIMER", "XCELL", "MCPCOUNTER")
+rownames(wilcoxRegMatrix)=unique(Abba_decon$CellType)
+wilcoxRegMatrixM=wilcoxRegMatrix
+wilcoxRegMatrixP=wilcoxRegMatrix
+
+for (i in 1:nrow(wilcoxRegMatrix)){
+  for (j in 1:ncol(wilcoxRegMatrix)){
+    a1=tryCatch({glm(value~Type1, data=Abba_decon[Abba_decon$Method==colnames(wilcoxRegMatrix)[j] &
+                                                          Abba_decon$CellType==rownames(wilcoxRegMatrix)[i], ])}, error=function(e) {NA})
+    wilcoxRegMatrix[i,j]=tryCatch({ifelse(summary(a1)$coefficients[ 2, 4]<0.05, summary(a1)$coefficients[ 2, 1], NA)}, error=function(e) {NA})
+ #   wilcoxRegMatrixM[i,j]=tryCatch({ifelse(summary(a1)$coefficients[ 3, 4]<0.05, summary(a1)$coefficients[ 3, 1], 0)}, error=function(e) {NA})
+ #   wilcoxRegMatrixP[i,j]=tryCatch({ifelse(summary(a1)$coefficients[ 4, 4]<0.05, summary(a1)$coefficients[ 4, 1], 0)}, error=function(e) {NA})
+  }
+}
+
+
+
+lx1=wilcoxRegMatrix[, c(1:2, 4:6) ]
+lx1[which(lx1<(-0.1))]=(-0.1)
+lx1[which(lx1>0.2)]=0.2
+
+heatmap.2(lx1, col=RdBu[11:1], trace="none", scale="none", Colv = NA, Rowv = NA)
+```
+
+
+Compare this to PAM50 calls
+
+```{r, fig.height=10, fig.width=10}
+Abba_decon$PAM50[which(Abba_decon$PAM50=="LumB")]="LumA"
+Abba_decon$PAM50[which(Abba_decon$PAM50=="Her2")]="Basal"
+ggplot(Abba_decon[ Abba_decon$PAM50!="Normal" , ], aes(x=PAM50, y=value, fill=factor(PAM50), label=sig))+geom_boxplot()+facet_wrap(~CellType+Method, scales="free")+geom_text(nudge_x = 0.5, col="black")
+
+
+```
+
+Compare significance:
+
+```{r}
+betaregMatrix=matrix(NA, ncol=3, nrow=length(unique(Abba_decon$CellType)))
+colnames(betaregMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ")
+rownames(betaregMatrix)=unique(Abba_decon$CellType)
+
+
+for (i in 1:nrow(betaregMatrix)){
+  for (j in 1:ncol(betaregMatrix)){
+    a1=tryCatch({betareg(value~factor(PAM50), data=Abba_decon[Abba_decon$Method==colnames(betaregMatrix)[j] &
+                                                          Abba_decon$CellType==rownames(betaregMatrix)[i] &
+                                                           Abba_decon$PAM50!="Normal" , ])}, error=function(e) {NA})
+    betaregMatrix[i,j]=tryCatch({summary(a1)$coefficients$mean[ 2, 4]}, error=function(e) {NA})
+  }
+}
+
+betaregMatrix2=matrix(p.adjust(betaregMatrix, "fdr"), ncol=3)
+
+wilcoxRegMatrix=matrix(NA, ncol=7, nrow=length(unique(Abba_decon$CellType)))
+colnames(wilcoxRegMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ", "CIBERSORT-ABS", "TIMER", "XCELL", "MCPCOUNTER")
+rownames(wilcoxRegMatrix)=unique(Abba_decon$CellType)
+wilcoxDiff=wilcoxRegMatrix
+for (i in 1:nrow(wilcoxRegMatrix)){
+  for (j in 1:ncol(wilcoxRegMatrix)){
+        a2=tryCatch({wilcox.test(value~factor(PAM50), data=Abba_decon[which(Abba_decon$Method==colnames(wilcoxRegMatrix)[j] &
+                                                           Abba_decon$CellType==rownames(wilcoxRegMatrix)[i] &
+                                                             Abba_decon$PAM50!="Normal"), ])}, error=function(e) {NA})
+        a1=tryCatch({glm(value~factor(PAM50), data=Abba_decon[Abba_decon$Method==colnames(wilcoxRegMatrix)[j] &
+                                                           Abba_decon$CellType==rownames(wilcoxRegMatrix)[i] &
+                                                             Abba_decon$PAM50!="Normal", ])}, error=function(e) {NA})
+     wilcoxRegMatrix[i,j]=tryCatch({summary(a1)$coefficients[ 2, 1]}, error=function(e) {NA})
+    wilcoxDiff[i,j]=tryCatch({(a2)$p.value}, error=function(e) {NA})
+    }
+}
+
+```
+
+
+```{r}
+lx1=wilcoxRegMatrix[, c(1:2, 4:6) ]
+lx1[which(lx1<(-0.1))]=(-0.1)
+
+heatmap.2(lx1, col=RdBu, trace="none", scale="none")
+```
+
+
+#### cell composition in tcga
+
+```{r, fig.height=10, fig.width=10}
+Identity=substr(TIMER_TCGA$cell_type, 14, 15)
+
+# for each type, need to put together a summary:
+lx1=grep("CIBERSORT$", colnames(TIMER_TCGA))
+temp1=TIMER_TCGA[ ,lx1]
+colRows=c("B.cell.", "T.cell.CD4", "T.cell.CD8", "Macrophage", "Neutrophil", "Myeloid.dendritic.cell", "Mast.cell", "Treg" )
+gIdx=lapply(colRows, function(x) grep(x, colnames(temp1)))
+temp1CIB=sapply(gIdx, function(x) tryCatch({rowSums(temp1[ , x ])},error=function(e) {temp1[ ,x]}))
+colnames(temp1CIB)=paste(colRows, "CIBERSORT")
+                
+# cibersort                
+lx2=grep("CIBERSORT.ABS$", colnames(TIMER_TCGA))
+temp2=TIMER_TCGA[ ,lx2]
+gIdx=lapply(colRows, function(x) grep(x, colnames(temp2)))
+temp2CIB=sapply(gIdx, function(x) tryCatch({rowSums(temp2[ , x ])},error=function(e) {temp2[ ,x]}))
+colnames(temp2CIB)=paste(colRows, "CIBERSORT-ABS")
+
+lx3=grep("XCELL", colnames(TIMER_TCGA))
+temp3=TIMER_TCGA[ ,lx3]
+gIdx=lapply(colRows, function(x) grep(x, colnames(temp3)))
+temp3CIB=sapply(gIdx, function(x) tryCatch({rowSums(temp3[ , x ])},error=function(e) {temp3[ ,x]}))
+colnames(temp3CIB)=paste(colRows, "XCELL")
+
+temp4=TIMER_TCGA[ ,grep("TIMER", colnames(TIMER_TCGA))]
+temp5=TIMER_TCGA[ ,grep("EPIC", colnames(TIMER_TCGA))]
+
+temp5t=temp5[ ,-c(2,8)]/rowSums(temp5[ ,-c(2,8)])
+
+NewTab=cbind(temp1CIB, temp2CIB, temp3CIB, temp4, temp5t, PatID=TIMER_TCGA$Patient.ID, PAM50=TIMER_TCGA$PAM50)
+
+meltTCGA=melt(NewTab)
+meltTCGA$cellType=sapply(strsplit(as.character(meltTCGA$variable)," "), function(x) x[1])
+meltTCGA$cellType=sapply(strsplit(as.character(meltTCGA$cellType),"_"), function(x) x[1])
+meltTCGA$Method=sapply(strsplit(as.character(meltTCGA$variable)," "), function(x) x[2])
+meltTCGA$Method[which(is.na(meltTCGA$Method)==T)]=sapply(strsplit(as.character(meltTCGA$variable[which(is.na(meltTCGA$Method)==T)]),"_"), function(x) x[2])
+
+meltTCGA=meltTCGA[-which(meltTCGA$cellType%in%c("Endothelial.cell", "NK.cell")), ]
+
+meltTCGA$PAM502=meltTCGA$PAM50
+meltTCGA$PAM502[which(meltTCGA$PAM502=="BRCA.LumB")]="BRCA.LumA"
+meltTCGA$PAM502[which(meltTCGA$PAM502=="BRCA.Her2")]="BRCA.Basal"
+meltTCGA$PAM502[which(meltTCGA$PAM502=="BRCA.Normal")]="NA"
+meltTCGA$cell=substr(meltTCGA$cellType, 1, 3)
+meltTCGA$cell[grep("CD8", meltTCGA$cellType)]="CD8"
+ggplot(meltTCGA[-which(meltTCGA$PAM502=="NA"), ], aes(x=PAM502, y=value, fill=factor(PAM502)))+geom_boxplot()+facet_wrap(~cellType+variable, scales="free")
+```
+
+Compare differences:
+
+```{r}
+meltTCGA$value=meltTCGA$value+0.01
+
+betaregMatrix=matrix(NA, ncol=3, nrow=length(unique(meltTCGA$cell)))
+colnames(betaregMatrix)=c("CIBERSORT", "EPIC", "QUANTISEQ")
+rownames(betaregMatrix)=unique(meltTCGA$cell)
+
+
+for (i in 1:nrow(betaregMatrix)){
+  for (j in 1:ncol(betaregMatrix)){
+    a1=tryCatch({betareg(value~factor(PAM502), data=meltTCGA[meltTCGA$Method==colnames(betaregMatrix)[j] &
+                                                           meltTCGA$cell==rownames(betaregMatrix)[i] &
+                                                             meltTCGA$PAM502!="NA", ])}, error=function(e) {NA})
+    betaregMatrix[i,j]=tryCatch({summary(a1)$coefficients$mean[ 2, 4]}, error=function(e) {NA})
+  }
+}
+
+
+
+wilcoxRegMatrix=matrix(NA, ncol=5, nrow=length(unique(meltTCGA$cell)))
+colnames(wilcoxRegMatrix)=c("CIBERSORT", "EPIC", "CIBERSORT-ABS", "TIMER", "XCELL")
+rownames(wilcoxRegMatrix)=unique(meltTCGA$cell)
+wilcoxDiff=wilcoxRegMatrix
+for (i in 1:nrow(wilcoxRegMatrix)){
+  for (j in 1:ncol(wilcoxRegMatrix)){
+        a1=tryCatch({wilcox.test(value~factor(PAM502), data=meltTCGA[meltTCGA$Method==colnames(wilcoxRegMatrix)[j] &
+                                                           meltTCGA$cell==rownames(wilcoxRegMatrix)[i] &
+                                                             meltTCGA$PAM502!="NA", ])}, error=function(e) {NA})
+        a2=tryCatch({glm(value~factor(PAM502), data=meltTCGA[meltTCGA$Method==colnames(wilcoxRegMatrix)[j] &                                                           meltTCGA$cell==rownames(wilcoxRegMatrix)[i] &                                                             meltTCGA$PAM502!="NA", ])}, error=function(e) {NA})
+    # wilcoxRegMatrix[i,j]=tryCatch({summary(a1)$coefficients[ 2, 4]}, error=function(e) {NA})
+    wilcoxRegMatrix[i,j]=tryCatch({a1$p.value}, error=function(e) {NA})
+    wilcoxDiff[i, j]=tryCatch({summary(a2)$coefficients[2, 1]}, error=function(e) {NA})
+    }
+}
+```
+
+```{r}
+TCGAwilcox=wilcoxDiff
+TCGAwilcox[which(TCGAwilcox<(-0.1))]=(-0.1)
+heatmap.2(TCGAwilcox, col=RdBu, scale="none", trace="none")
+```
+
+
 ## Gene expression differences between normal-dcis
 
 
@@ -185,7 +571,7 @@ Below, we plot the top 15 terms in immune, cancer, ECM and metasbolism shows the
 |ECM| junction organisation, laminins, ECM pathways, integrins | proteoglycans, keratin sulfate degradation|
 |Metabolism | RNA syn, glycolysis, cholesterol, purine catbolism, mitochondria | starch sucrose, glucuronidation, ascorbate metabolism|
 
-```{r, fig.height=8}
+```{r, fig.height=8, eval=F}
 PWayMap=AbbaHST@result$GSEA.results$pway
 PWayMap2=PWayMap[  which(PWayMap[ ,3]<0.05), ]
 PWayMap2Annot=TermSelectionMap(rownames(PWayMap2))
@@ -195,12 +581,104 @@ canceridx=which(PWayMap2Annot[ ,5]==1)
 ECMidx=which(PWayMap2Annot[ ,7]==1)
 Metabidx=which(PWayMap2Annot[ ,6]==1)
 
-par(mfrow=c(2,2), oma=c(0,5, 0,0))
+par(mfrow=c(2,2), oma=c(0,3, 0,0))
 
 barplot(PWayMap2[ immidx[1:15],1], main="immune terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
 barplot(PWayMap2[ canceridx[1:15],1], main="cancer terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
 barplot(PWayMap2[ ECMidx[1:15],1], main="ECM terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
 barplot(PWayMap2[ Metabidx[1:15],1], main="Metab terms", las=2, horiz = T, xlab="Enrichment Score", cex.names=0.7)
+```
+
+## Paired analysis:
+
+Look at the following comparisons:
+
+1. Check differences between DCIS vs IDC
+2. single sample differences: case 8
+3. single sample differences: case 9
+
+```{r}
+# Part 1
+ddsR=DESeq(ddsR)
+dcisIdcRes=results(ddsR, contrast=c("type", "DCIS", "IDC"))
+a1=dcisIdcRes[which(dcisIdcRes$padj<0.1), ]
+# Part 2
+ycase8=DGEList(counts=countsTableAllF[ ,c("8DCIS", "8IDC")], samples=infoTable2[ c("8DCIS", "8IDC"), ])
+ycase8 <- ycase8[-which(rowSums(cpm(ycase8))<=1), ]
+ycase8<-calcNormFactors(ycase8)
+ycase8$common.dispersion=y$common.dispersion
+fit8=glmFit(ycase8, design=model.matrix(~factor(ycase8$samples$type)))
+lrt8=glmLRT(fit8)
+# Part 3
+ycase9=DGEList(counts=countsTableAllF[ ,c("9DCIS", "9IDC")], samples=infoTable2[c("9DCIS", "9IDC"), ])
+ycase9 <- ycase9[-which(rowSums(cpm(ycase9))<=1), ]
+ycase9<-calcNormFactors(ycase9)
+ycase9$common.dispersion=y$common.dispersion
+fit9=glmFit(ycase9, design=model.matrix(~factor(ycase9$samples$type)))
+lrt9=glmLRT(fit9)
+```
+
+There are `r length(a1)` genes with changes when comparing DCIS vs IDC.
+Comparing case 8 and case 9 separately, we see `r length(which(abs(lrt8$table$logFC)>2))` and r length(which(abs(lrt9$table$logFC)>2))` genes with a logFC greater than 2 respectively.
+
+Use the fold changes in the analyses above to compare DCIS and IDC using HTSAnalyzeR
+
+```{r}
+di_input=dcisIdcRes[ ,2]
+names(di_input)=rownames(dcisIdcRes)
+r1=topTags(lrt8, p.value=1, n=200000)
+r2=topTags(lrt9, p.value = 1, n=20000)
+
+HTSrall=gseaCode(di_input, hits=rownames(a1), c2List, overlap = T)
+HTSr1=gseaCode(data.matrix(r1$table), hits=NULL, c2List)
+HTSr2=gseaCode(data.matrix(r2$table), hits=NULL, c2List)
+
+intersectionlist=intersect(rownames(HTSr1@result$GSEA.results$pway), rownames(HTSr2@result$GSEA.results$pway))
+intersectB=intersect(intersectionlist, rownames(HTSrall@result$GSEA.results$pway))
+
+HTScombine2=cbind(HTSrall@result$GSEA.results$pway[intersectB, ], HTSr1@result$GSEA.results$pway[intersectB, ],
+                 HTSr2@result$GSEA.results$pway[intersectB, ])
+lx1=which(HTScombine2[ ,3]<0.05)
+lx2=which(HTScombine2[ ,6]<0.05)
+lx3=which(HTScombine2[ ,9]<0.05)
+
+lxall=unique(c(lx1, lx2, lx3))
+
+HTScombineSig=HTScombine2[lxall, c(1, 4, 7)]
+HTScombineSig[ ,1]=HTScombineSig[ ,1]*(-1)
+HTScombinePadj=HTScombine2[lxall, c(3,6,9)]
+colnames(HTScombineSig)=c("All", "Case8", "Case9")
+
+# Write the file to file
+
+write.csv(cbind(HTScombineSig, HTScombinePadj), file="rslt/GSEA_DCIS_vs_IDC_recurrence_cohort.csv")
+
+```
+
+
+```{r}
+rNames=rownames(HTScombineSig)
+rNames=gsub("REACTOME_", "", rNames)
+rNames=gsub("PID_", "", rNames)
+rNames=gsub("SIG_", "", rNames)
+rNames=gsub("BIOCARTA_", "", rNames)
+rNames=gsub("KEGG_", "", rNames)
+
+rownames(HTScombineSig)=rNames
+
+
+tSelMap=TermSelectionMap(rownames(HTScombineSig))
+rMaxVals=rowMax(tSelMap)
+rMaxVals[which(rMaxVals==0)]=NA
+rSideCols=brewer.pal(12, "Set3")[factor(rMaxVals)]
+
+a1=heatmap.2(HTScombineSig, col=brewer.pal(11, "RdBu")[11:1], trace="none", scale="none", Colv = NA, RowSideColors = rSideCols)
+
+HM2=HTScombineSig[a1$rowInd, ]
+rSideCols2=rSideCols[a1$rowInd]
+Match2=order(rSideCols2)
+heatmap.2(HM2[Match2, ], col=brewer.pal(11, "RdBu")[11:1], trace="none", scale="none", Colv = NA,  RowSideColors = rSideCols2[Match2], Rowv=NA)
+
 ```
 
 ## ssGSEA
@@ -215,6 +693,7 @@ To obtain an idea of the variability in immune signalling in each sample, we use
 * Activation (Pardoll)
 * Dysfunction (Pardoll)
 * Naive (Tirosh signature)
+* CTL signature (Jiang signature)
 
 Below are the scores for the Abbaset, stratified by subtype. Blue indicates normal samples, red indicates ER+ (Luminal B), green are Basal-like, green Her2+ and purple ER+ (Luminal A)
 
@@ -238,22 +717,21 @@ ColSideColorsC=AbbaClin$`PAM50 call`[match(colnames(TPMAbba), AbbaClin$SampleID)
 
 colI=as.character(infoTable2$Color_group_2)
 
-ImmRec=gsva(log2(data.matrix(TPMtable2+0.01)), ImmSig, mx.diff=TRUE, method="ssgsea", verbose=FALSE, parallel.sz=1, ssgsea.norm=T)
+ImmRec=gsva(log2(data.matrix(TPMtable2[ ,1:6]+0.01)), ImmSig, mx.diff=TRUE, method="ssgsea", verbose=FALSE, parallel.sz=1, ssgsea.norm=T)
 
 par(oma=c(0, 0, 0, 7))
-heatmap.2(Imm2[-c(6:7, 13), ], col=RdBu[11:1], trace="none", scale="none", symbreaks = T,  ColSideColors = as.character(as.numeric(factor(ColSideColorsC))), main="Abbaset")
+a1=heatmap.2(Imm2[-c(12), ], col=RdBu[11:1], trace="none", scale="none", symbreaks = T,  ColSideColors = as.character(as.numeric(factor(ColSideColorsC))), main="Abbaset")
 ```
 
 We see that compared to the normals, the DCIS have enrichment of multiple signatures: eg. IFNG, lymphocyte infiltration, macrophage, activated pathways. Overall, this does not seem specific for any response, and includes both activated as well as dysfunctional signatures.
 
 
 ```{r}
-heatmap.2(ImmRec[c(8, 5, 11, 14, 10,12,9,1, 3, 4, 2) ,-c(7:10)], col=RdBu[11:1], trace="none", Rowv = NA, scale="none", symbreaks = T,  ColSideColors = colI[-c(7:10)], main="recurrence set")
+heatmap.2(ImmRec[colnames(a1$carpet) ,], col=RdBu[11:1], trace="none", Rowv = NA, scale="none", symbreaks = T,  ColSideColors = colI[-c(7:10)], main="recurrence set")
 ```
 
 
-The recurrence set shows higher immune activation in  case 8 compared to the other samples, but also an enrichment for IFNG signalling in 8IDC and 2IDC. 
-
+The recurrence set shows higher immune activation in  case 8 compared to the other samples, but also an enrichment for IFNG signalling in 8IDC and 2IDC
 
 ```{r, eval=F}
 ## if not already run:
@@ -266,8 +744,12 @@ ColSideColorsB=AbbaClin$ITIL[match(colnames(TPMAbba), AbbaClin$SampleID)]
 ColSideColorsB[which(ColSideColorsB=="-")]=NA
 ColSideColorsB=as.character(cut(as.numeric(ColSideColorsB), c(-5, 15, 35, 70), brewer.pal(3, "Greens")))
 
+AbbaCTYLscore=exp(colMeans(log(TPMAbba[c("GZMA", "PRF1"), ]+0.01)))
+AbbaCTYLscorescale=scale(AbbaCTYLscore)
 par(oma=c(0, 0, 0, 7))
-heatmap.2(Imm2[-c(6,7, 13), ], col=RdBu[11:1], trace="none", scale="none", symbreaks = T,  ColSideColors = ColSideColorsB)
+a1=heatmap.2(Imm2[-c(12), ], col=RdBu[11:1], trace="none", scale="none", symbreaks = T,  ColSideColors = ColSideColorsB)
+
+heatmap.2(rbind(Imm2[, a1$colInd ], t(AbbaCTYLscorescale[a1$colInd])), col=RdBu[11:1], Colv =NA, trace="none", scale="none", symbreaks = T,  ColSideColors = ColSideColorsB)
 
 ```
 
@@ -279,6 +761,71 @@ ssAbbaP=sapply(1:nrow(Imm2), function(x) t.test(Imm2[x, ]~typeA)$p.value)
 ssAbbaP2=p.adjust(ssAbbaP, "fdr")
 names(ssAbbaP2)=rownames(Imm2)
 ssAbbaP2
+
+# also see if there is an association with TIL content
+ColSideColorsB=ColSideColorsC
+ColSideColorsB[grep("Lum", ColSideColorsB)]="Lum"
+ColSideColorsB[grep("Her2", ColSideColorsB)]="Basal"
+
+ColSideColorsB=factor(ColSideColorsB, levels=c("Normal", "Basal", "Lum"))
+
+
+TILsum=AbbaClin$ITIL[match(colnames(Imm2), AbbaClin$SampleID)]
+TILsum[which(TILsum=="-")]=0
+TILsum=as.numeric(TILsum)/100
+#Type=substr(colnames(Imm2))
+ssAbbaGLM=lapply(1:nrow(Imm2), function(x) summary(glm(Imm2[x, ]~ColSideColorsB+TILsum)))
+
+
+TILcontr=sapply(ssAbbaGLM, function(x) ifelse(coefficients(x)[4, 4]<0.05,  coefficients(x)[4, 1], NA))
+Bascontr=sapply(ssAbbaGLM, function(x) ifelse(coefficients(x)[2, 4]<0.05,  coefficients(x)[2, 1], NA))
+Lumcontr=sapply(ssAbbaGLM, function(x) ifelse(coefficients(x)[3, 4]<0.05,  coefficients(x)[3, 1], NA))
+
+output=rbind(TILcontr, Bascontr, Lumcontr)
+colnames(output)=rownames(Imm2)
+
+heatmap.2(output, col=RdBu[11:1], Rowv = NA, Colv = NA, trace="none")
 ```
 
 `r names(ssAbbaP2)[which(ssAbbaP2<0.05)]` pathways are significantly different between Normal and DCIS
+
+We can also test for comparison of these methods to the geometric mean:
+
+```{r}
+# Abba cohort:
+AbbaGeoMean=sapply(Exp2List, function(x) exp(colMeans(log(TPMAbba[na.omit(match(x, rownames(TPMAbba))), ]+0.01))))
+#Recurence set:
+RecGeoMean=sapply(Exp2List, function(x) exp(colMeans(log(TPMtable2[na.omit(match(x, rownames(TPMtable2))), ]+0.01))))
+
+par(mfrow=c(3,4))
+for (i in c(1:11, 13)){
+  a1=cor.test(c(as.vector(t(Imm2[ i,])), as.vector(t(ImmRec[ i,1:6]))), 
+       c(as.vector(AbbaGeoMean[ ,i]),as.vector(RecGeoMean[ 1:6, i])))
+  plot(c(as.vector(t(Imm2[ i,])), as.vector(t(ImmRec[ i,1:6]))), 
+       c(as.vector(AbbaGeoMean[ ,i]),as.vector(RecGeoMean[ 1:6, i])),
+       main=sprintf("%s r=%.2f p=%0.2g", colnames(AbbaGeoMean)[i], a1$estimate, a1$p.value),
+       xlab="ssGSEA score", ylab="Geom Mean", 
+       col=rep(c(3, 4), times=c(35, 6)), pch=19)
+}
+```
+
+
+Also compute these values for the TCGA cohort so we can do comparisons: quick check that the scores previously calculated match our new calculations
+
+```{r, cache=T, eval=T}
+
+ImmSig=GeneSetCollection(gsList)
+TCGA_ssgsea=gsva(log2(data.matrix(RSv2+0.01)), ImmSig, mx.diff=TRUE, method="ssgsea", verbose=FALSE, parallel.sz=1, ssgsea.norm=T, kcdf="Poisson", abs.ranking=T)
+
+m1=match(ThorssonTab$`TCGA Participant Barcode`, substr(colnames(TCGA_ssgsea), 1, 12))
+TCGA_rna_cyl=exp(colMeans(log(RSv2[c("GZMA", "PRF1"), ])))
+plot(as.numeric(ThorssonTab$`IFN-gamma Response`), TCGA_ssgsea["CX_IFNG_Wolf", m1])
+
+# add the new scaled signatures to the Thorsson Table
+#ThorssonTab$CTYL=exp(colMeans(log(RSv2[c("GZMA", "PRF1"), m1])))
+ThorssonTab$CTL=TCGA_ssgsea["CTL", m1]
+ThorssonTab$Activated=TCGA_ssgsea["Activated", m1]
+ThorssonTab$Inhibitory=TCGA_ssgsea["Inhibitory", m1]
+ThorssonTab$Exhausted=TCGA_ssgsea["Exhausted", m1]
+ThorssonTab$Naive=TCGA_ssgsea["Naive", m1]
+```

@@ -1,5 +1,158 @@
 # Mutations
 
+## Common Mutations
+
+Plot of the overlap between the DCIS and IDC here:
+
+```{r}
+library(VennDiagram)
+# library(multipanelfigure)
+# figure <- multi_panel_figure(columns = 1, rows = 2)
+#library(venneuler)
+
+vennlist=list()
+for (i in 1:6){
+  x1=paste(Mutall2[[i*2-1]]$Hugo_Symbol, Mutall2[[i*2-1]]$Start_position)
+  x2=paste(Mutall2[[i*2]]$Hugo_Symbol, Mutall2[[i*2]]$Start_position)
+
+  vennlist[[i]]=venn.diagram( x = list(x1, x2), category.names=c("DCIS", "IDC"),filename = NULL, main=sprintf("Case %s", i), 
+                              fill=dcisidcCol)
+}
+library(multipanelfigure)
+figure <- multi_panel_figure(columns = 3, rows = 2)
+figure %<>% 
+    fill_panel(vennlist[[1]]) %<>%
+    fill_panel(vennlist[[2]]) %<>%
+    fill_panel(vennlist[[3]]) %<>%
+    fill_panel(vennlist[[4]]) %<>%
+    fill_panel(vennlist[[5]]) %<>%
+    fill_panel(vennlist[[6]])
+```
+
+Assessment of overlap due to low read depth?
+
+```{r}
+Mut_Alt=unlist(sapply(Mutall2, function(x) x$t_alt_count))
+Mut_ref=unlist(sapply(Mutall2, function(x) x$t_ref_count))
+
+plot(Mut_ref+Mut_Alt, Mut_Alt, xlim=c(0, 500), ylim=c(0, 100))
+```
+
+Given average depth, expected VAF suported by at least 2 reads?
+also, given sequencing error rate of 1%
+
+```{r}
+VAFseq=seq(0.01, 0.2, by=0.01)
+
+ProbMat=sapply(VAFseq, function(x) 1-pbinom(2, round(DIn$hs_mean_target_coverage), x))
+rownames(ProbMat)=DIn$sample_alias
+
+ProbMat=ProbMat[-grep("Normal",rownames(ProbMat)), ]
+
+Cols=brewer.pal(12, "Paired")
+
+plot(NA, xlim=c(0, 0.2), ylim=c(0, 1), ylab="Probability", xlab="Variant Allele Frequency")
+
+for (i in 1:nrow(ProbMat)){
+  lines(VAFseq, ProbMat[ i,], col=Cols[i], lwd=2)
+}
+
+abline(h=0.9)
+
+```
+
+Summary of the types of mutations present
+
+```{r}
+TabList=list()
+for (i in 1:12){
+TabList[[i]]=table(factor(Mutall2[[i]]$Reference_Allele[which(Mutall2[[i]]$Variant_Type=="SNP")]), factor(Mutall2[[i]]$Tumor_Seq_Allele2[which(Mutall2[[i]]$Variant_Type=="SNP")]))
+}
+TabList2=lapply(TabList, function(x) x/sum(x))
+names(TabList2)=names(Mutall2)
+Tab3=melt(TabList2)
+Tab3$change=paste(Tab3$Var1, "->", Tab3$Var2)
+Tab3$Var1B=ifelse(Tab3$Var1=="G", "C", ifelse(Tab3$Var1=="A", "T", (Tab3$Var1)))
+Tab3$Var1C=ifelse(Tab3$Var2=="G", "C", ifelse(Tab3$Var2=="A", "T", ifelse(Tab3$Var2=="T", "A", "G")))
+Tab3$change2=Tab3$change
+Tab3$change2[grep("G ->", Tab3$change)]=paste(paste(Tab3$Var1B, "->", Tab3$Var1C))[grep("G ->", Tab3$change)]
+Tab3$change2[grep("A ->", Tab3$change)]=paste(paste(Tab3$Var1B, "->", Tab3$Var1C))[grep("A ->", Tab3$change)]
+
+Tab3=Tab3[-which(Tab3$value==0), ]
+## do a ggplot
+## can also view the full 12 using change
+ggplot(Tab3, aes(x=L1, y=value, fill=change2))+geom_bar(stat="identity")+ theme(axis.text.x=element_text(angle=90)) #+facet_grid(L1~.)
+```
+
+Compute if there is a difference based on sample or based on type
+
+```{r}
+Tab3n=data.frame(acast(Tab3[ ,c("L1", "change2", "value")],  L1~change2, sum))
+Tab3n=Tab3n+0.0001
+Tab3n$sample=substr(rownames(Tab3n), 1, 1)
+Tab3n$type=substr(rownames(Tab3n), 2, 2)
+
+summary(betareg(T....C~sample+type, data=Tab3n))
+```
+
+Signature analysis: Obtain the reference context
+
+```{r, eval=F}
+TabListB=list()
+for (i in 1:12){
+TabListB[[i]]=data.frame(left=toupper(substr(Mutall2[[i]]$ref_context[which(Mutall2[[i]]$Variant_Type=="SNP")], 10, 10)), 
+                         mut=toupper(substr(Mutall2[[i]]$ref_context[which(Mutall2[[i]]$Variant_Type=="SNP")], 11, 11)),
+                         right=toupper(substr(Mutall2[[i]]$ref_context[which(Mutall2[[i]]$Variant_Type=="SNP")], 12, 12)),
+                         Var=Mutall2[[i]]$Tumor_Seq_Allele2[which(Mutall2[[i]]$Variant_Type=="SNP")])
+}
+names(TabListB)=names(Mutall2)
+
+TabListBmelt=melt(TabListB, var.id="left")
+TabListBmelt$Var1B=ifelse(TabListBmelt$mut=="G", "C", ifelse(TabListBmelt$mut=="A", "T", as.character(TabListBmelt$mut)))
+TabListBmelt$Var2B=ifelse(TabListBmelt$mut=="G", 
+                          ifelse(TabListBmelt$Var=="G", "C",ifelse(TabListBmelt$Var=="A", "T", ifelse(TabListBmelt$Var=="C", "G","A"))),
+                          ifelse(TabListBmelt$mut=="A", ifelse(TabListBmelt$Var=="G", "C",ifelse(TabListBmelt$Var=="A", "T", ifelse(TabListBmelt$Var=="C", "G","A"))), 
+                                 as.character(TabListBmelt$Var)))
+
+
+
+TabListBmelt$BaseLeft=ifelse(TabListBmelt$mut!=TabListBmelt$Var1B, 
+                             ifelse(TabListBmelt$right=="G", "C",ifelse(TabListBmelt$right=="A", "T", ifelse(TabListBmelt$right=="C", "G","A"))), as.character(TabListBmelt$left))
+
+TabListBmelt$BaseRight=ifelse(TabListBmelt$mut!=TabListBmelt$Var1B, 
+                             ifelse(TabListBmelt$left=="G", "C",ifelse(TabListBmelt$left=="A", "T", ifelse(TabListBmelt$left=="C", "G","A"))), as.character(TabListBmelt$right))
+
+TabListBmelt$contextO=toupper(paste(TabListBmelt$BaseLeft,TabListBmelt$Var1B ,TabListBmelt$BaseRight, sep=""))
+TabListBmelt$contextV=toupper(paste(TabListBmelt$BaseLeft,TabListBmelt$Var2B ,TabListBmelt$BaseRight, sep=""))
+TabListBmelt$change=paste(TabListBmelt$Var1B, TabListBmelt$Var2B, sep=">")
+
+Alist=table(TabListBmelt$change, TabListBmelt$contextO, TabListBmelt$L1)
+
+d.mat=sapply(1:12, function(x) melt(Alist[ , , x])[ ,3])
+t1=melt(Alist[ , , 1])
+t1$v=substr(t1$Var1, 1, 1)
+t1$c=substr(t1$Var2, 2, 2)
+
+d.mat=data.frame(d.mat[-which(t1$v!=t1$c), ])
+colnames(d.mat)=paste("BRCA", names(Mutall2), sep="::")
+d.mat=cbind(MutationType=t1$Var1[-which(t1$v!=t1$c)], Nutrinucleotide=t1$Var2[-which(t1$v!=t1$c)], d.mat)
+#d.mat$MutationType=paste(substr(d.mat$Nutrinucleotide, 1, 1), "[", d.mat$MutationType, "]", substr(d.mat$Nutrinucleotide, 3, 3), sep="")
+
+write.csv(d.mat, file="rslt/DCIS-IDC_96_mutsig_codons.csv", row.names = F)
+```
+
+Load from Sig Profiler: See the new cosmic output for the signature information:
+
+```{r}
+input1=read.delim("data/RecurrenceCohort/mut_sigs/sig_activities.txt", sep="\t")
+input1b=input1[ ,-1]/rowSums(input1[ ,-1])
+input1b=input1b[ ,-which(colSums(input1b)==0)]
+rownames(input1b)=input1[ ,1]
+
+heatmap.2(data.matrix(input1b[ ,-1]), col=brewer.pal(9, "Blues"), scale="none", trace="none", Colv = NA, Rowv=NA)
+```
+
+
 ## All coding mutations 
 
 Below is a plot of all coding mutations, color coded according to type of mutation. If a mutation is observed at exactly the same site, overlap in the plot is observed. 

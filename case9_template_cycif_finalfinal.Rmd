@@ -213,7 +213,7 @@ lxLumFrac=t(lxLum)/colSums(lxLum)
 # 
 lxImm=lx1[rownames(lx1)%in%immlabels, ]
 lxImm=cbind(rowSums(lxImm[ ,2:3]), lxImm[ ,6])
-lxImmFrac=t(lxImm)/colSums(lxImm)
+lxImmFrac9=t(lxImm)/colSums(lxImm)
 # 
 lxStr=lx1[rownames(lx1)%in%stromaLabels,]
 lxStr=cbind(rowSums(lxStr[ ,2:3]), lxStr[ ,6])
@@ -221,7 +221,7 @@ lxStrFrac=t(lxStr)/colSums(lxStr)
 
 par(mfrow=c(2,2))
 
-barplot(lxImmFrac, beside=T, xlab = "proportion of Immune cells", col=pal2sub, horiz = T, las=2, main="Immune")
+barplot(lxImmFrac9, beside=T, xlab = "proportion of Immune cells", col=pal2sub, horiz = T, las=2, main="Immune")
  
 barplot(lxLumFrac[ ,lumLab2], beside=T, xlab = "proportion of Luminal cells", col=pal2sub, horiz = T, las=2, main="Epi")
  
@@ -229,6 +229,20 @@ barplot(lxStrFrac, beside=T, col=pal2sub, xlab = "proportion of stromal cells", 
 
 ```
 
+calculate p values using the proportion test:
+
+```{r, eval=F}
+NcellsTotal=colSums(lx1[-match(c("omit", "rbc"), rownames(lx1)), ])
+NImmuneTotal=colSums(lxImm)
+
+sapply(1:nrow(lxImm), function(x) prop.test(lxImm[x, ], NImmuneTotal)$p.value)
+
+NTumTotal=colSums(lxLum)
+
+sapply(1:nrow(lxLum), function(x) prop.test(lxLum[x, ], NImmuneTotal)$p.value)
+
+
+```
 
 ### Expression summary
 
@@ -308,7 +322,7 @@ barplot(tcelldist*100/amx1[-1], ylab="Percentage ''interacting'' with luminal", 
 
 As there are multiple immune populations here, we can determine whether a particular cell type is closer compared to that by chance. To do this, we permute the immuen cell labels 1000 times and compute a z-score and p-value for the observed value:
 
-```{r}
+```{r, cache=T}
 #########
 ## Figure out significance by permuting the immune labels
 #########
@@ -476,7 +490,7 @@ Finally, we can assess mixing between the different immune populations and the t
 * Select a grid size of interest (300, approx 100um) and shift the boundaries to check the variability in these values
 * Perform the analysis excluding particular squares of interest: can we remove tumor-only grids to take into account differences in tissue architecture? What if we did the same thing with the immune cells? Or consider only squares that contain both immune and tumor cells? 
 
-```{r}
+```{r, cache=T}
 
 ################################
 ## method 2: M-H mixing index?
@@ -527,9 +541,9 @@ tempA=MHsumm[ 3,]
  dfall=data.frame(dfall)
  dfall$comp=names(tempA)[1:10]
  colnames(dfall)=c(  "mean", "lower", "upper", "comp")
- dfall$type="gridshift"
+ dfall$type="gridfshift"
  ggplot(MHmelt2, aes(x=Var1, y=meanV, col=mean))+geom_point()+geom_errorbar(aes(ymin=lowV, ymax=higv), width=.2)+
-        ggtitle("case8 dcis Morisita-Horn variation of index")+theme_bw()+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+        ggtitle("case9 idc Morisita-Horn variation of index")+theme_bw()+theme(axis.text.x = element_text(angle = 90, hjust = 1))
  
 ``` 
  
@@ -599,11 +613,11 @@ colnames(MHsummExcBoth)=colnames(MHsummGrid)
 
 
 MHgridshift=sapply(1:10, function(x) quantile(MHsummGrid[ ,x], c(0.025, 0.975), na.rm = T))
-dfallc=cbind(colMeans(MHsummGrid[ ,1:10], na.rm=T), MHgridshift[1, ], MHgridshift[2, ])
-dfallc=data.frame(dfallc)
-dfallc$comp=names(tempA)[1:10]
-colnames(dfallc)=c(  "mean", "lower", "upper", "comp")
-dfallc$type="gridshift"
+ dfallc=cbind(colMeans(MHsummGrid[ ,1:10], na.rm=T), MHgridshift[1, ], MHgridshift[2, ])
+ dfallc=data.frame(dfallc)
+ dfallc$comp=names(tempA)[1:10]
+ colnames(dfallc)=c(  "mean", "lower", "upper", "comp")
+ dfallc$type="gridfshift"
 
 MHexcBoth=sapply(1:10, function(x) quantile(MHsummExcBoth[ ,x], c(0.025, 0.975), na.rm = T))
 dfallb=cbind(colMeans(MHsummExcBoth[ ,1:10], na.rm=T), MHexcBoth[1, ], MHexcBoth[2, ])
@@ -626,14 +640,38 @@ dfallg$comp=names(tempA)[1:10]
 colnames(dfallg)=c(  "mean", "lower", "upper", "comp")
 dfallg$type="shift_omit_tum"
 
-dfall3=rbind(dfall, dfallg, dfalli, dfallb)
+dfall3=rbind(dfallc, dfallg, dfalli, dfallb)
+
+dfall3
+
+head(dfall)
 
 ```
 
 Plot the result below
 
 ```{r}
+# combine samples together
 all9sam=rbind(cbind(dcis9mh, samp="dcis"), cbind(dfall3, samp="idc"))
 ggplot(all9sam, aes(x=comp, y=mean, col=samp))+facet_grid(~type)+geom_point()+geom_errorbar(aes(ymin=lower, ymax=upper))+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
 
+Compute p-values in differences:
+
+```{r}
+all9sam2=all9sam[which(all9sam$type=="shift_omit_tum"), ]
+
+lx2=unique(all9sam2$comp)
+
+Pval=rep(NA, length(unique(lx2)))
+
+for (i in 1:length(lx2)){
+  ax1=which(all9sam2$comp==lx2[i])
+  sde=(all9sam2$upper[ax1[2]]-all9sam2$lower[ax1[2]])/(2*1.96)
+  zv=abs(all9sam2$mean[ax1[2]]-all9sam2$mean[ax1[1]])/sde
+  Pval[i]=exp(-0.717*zv -0.416*zv^2)
+}
+
+names(Pval)=unique(lx2)
+p.adjust(Pval)
 ```

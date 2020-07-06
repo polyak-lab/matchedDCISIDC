@@ -155,7 +155,9 @@ Note that the plot considers the recurrence and Abba cohorts separately so the b
 ## Recurrence cohort
 
 Pthresh=0.1
-AllDCNGR=GRanges(seqnames = AllDCN$chrom, ranges = IRanges(start=AllDCN$start.pos, end=AllDCN$end.pos), ampDel=ifelse(AllDCN$call=="+", 1, ifelse(AllDCN$call=="-", -1, 0 ) ), sample=AllDCN$sampleID, case=substr(AllDCN$sampleID, 1, 1), type=substr(AllDCN$sampleID, 2, 5))
+tReg=WindowReg[which(WindowReg$padj<0.1)]
+
+AllDCNGR=GRanges(seqnames = AllDCN$chrom, ranges = IRanges(start=AllDCN$start.pos, end=AllDCN$end.pos), ampDel=ifelse(AllDCN$call=="+", 1, ifelse(AllDCN$call=="-", -1, 0 ) ), val=AllDCN$mean, sample=AllDCN$sampleID, case=substr(AllDCN$sampleID, 1, 1), type=substr(AllDCN$sampleID, 2, 5))
 GainVals=findOverlaps(AllDCNGR[AllDCNGR$ampDel==1&AllDCNGR$type=="DCIS"],WindowReg)
 # need to check these values are unique
 tx1=AllDCNGR$sample[AllDCNGR$ampDel==1&AllDCNGR$type=="DCIS"]
@@ -208,7 +210,65 @@ WindowReg$GainAbbaID=AmpS
 WindowReg$LossAbbaID=DelS
 ```
 
+Do a quick visualisation of what the recurrence cohort looks like at these regions
 
+```{r}
+tReg$cyto2=paste(tReg$cytoband, c(1:33))
+intVals=lapply(1:12, function(x) findOverlaps(tReg, CNVRecGRanges[[x]]))
+hitIdx=lapply(intVals, function(x) queryHits(x))
+subIdx=lapply(intVals, function(x) subjectHits(x))
+dupSamples=lapply(hitIdx, function(x) x[which(duplicated(x))])
+## remove the duplicated samples and assign values which are higher of the two
+CNvals2=lapply(1:12, function(x) CNVRecGRanges[[x]]$total_copy_ratio[subIdx[[x]]])
+CNames=lapply(1:12, function(x) tReg$cyto2[hitIdx[[x]]])
+calls2=lapply(1:12, function(x) (CNVRecGRanges[[x]]$call[subIdx[[x]]]))
+TabList=lapply(1:12, function(x) data.frame(gene=factor(CNames[[x]]), CN=as.numeric(CNvals2[[x]]), calls=calls2[[x]]))
+
+checkOLaps=sapply(TabList, function(x) which(duplicated(x$gene)==T))
+CC=sapply(checkOLaps, length)
+x2=which(CC>0)
+
+for (i in x2){
+  ax=checkOLaps[[i]]#which(duplicated(TabList[[i]]$gene))
+  cidx=ax-1
+   axb=sapply(1:length(ax), function(x) which.max(abs(TabList[[i]]$CN[c(ax[x], cidx[x])])))
+  keepIdx=sapply(1:length(axb), function(x) c(ax[x],cidx[x])[axb[x]])
+  TabList[[i]]=TabList[[i]][-c(setdiff(c(ax,cidx), keepIdx)), ]
+}
+
+names(TabList)=names(CNVRec)
+Mlist=melt(TabList)
+MlistReshape=acast(Mlist[ ,c(1,4:5)], gene~L1, fun.aggregate = mean)
+
+MlistReshape[which(MlistReshape<(-1), arr.ind=T)]=(-1.5)
+MlistReshape3=matrix(as.numeric(as.character(MlistReshape)), nrow=nrow(MlistReshape), byrow =F)
+
+rownames(MlistReshape3)=rownames(MlistReshape)
+mx2=rowSums(abs(MlistReshape3))
+
+colnames(MlistReshape3)=names(CNVRec)
+chrNames=as.numeric(seqnames(tReg)[match(rownames(MlistReshape3), tReg$cyto2)])
+geneLoc=start(ranges(tReg[match(rownames(MlistReshape3), tReg$cyto2)]))
+MlistReshape3=data.frame(MlistReshape3, chr=chrNames,Loc=geneLoc, genes=as.character(rownames(MlistReshape3)))
+MlistReshape3$rSum=rowSums(MlistReshape3[ ,1:12])
+
+colnames(MlistReshape3)[1:12]=names(CNVRec)
+
+MlistReshape3=MlistReshape3[order(MlistReshape3$rSum), ]
+MlistReshape3$genes=factor(MlistReshape3$genes, levels=MlistReshape3$genes)
+
+CNVImmRec=melt(MlistReshape3, measure.vars = c("1DCIS", "2DCIS","3DCIS", "8DCIS","5DCIS", "9DCIS",  "1IDC","2IDC","3IDC","8IDC","5IDC","9IDC"))
+CNVImmRec$case=substr(CNVImmRec$variable, 2, 6)
+CNVImmRec$pat=substr(CNVImmRec$variable, 1, 1)
+CNVImmRec$call=Mlist$calls[match(paste(CNVImmRec$genes, CNVImmRec$variable),paste(Mlist$gene, Mlist$L1) )]
+
+CNVImmRec$value[which(CNVImmRec$value>1)]=1
+CNVImmRec$value[which(CNVImmRec$value<(-1))]=(-1)
+## plot the recurrence set
+ggplot(data=CNVImmRec, aes(x=genes, y=variable, fill=value))+geom_tile()+facet_grid(pat~chr,scales="free", space="free_x")+
+  scale_fill_gradient2( low = "blue", high = "red")+theme(axis.text.x=element_text(angle=90, vjust=.8, hjust=1.01))+ggtitle(label="Recurrence set")
+
+```
 
 ```{r}
 midx=which(WindowReg$ImmGenes=="" | WindowReg$padj>Pthresh)
@@ -385,13 +445,13 @@ SRTdfcastCall2=t(SRTdfcastCall[ ,idxM])
 #RTdfcastTum2$Immune=(as.numeric(SRTThorsson$`Lymphocyte Infiltration Signature Score`))
 
 DNames=c("TIL Regional Fraction", "Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
-         "TGF-beta Response", "Wound Healing")
+         "TGF-beta Response", "Wound Healing", "CTL", "Activated", "Inhibitory", "Exhausted", "Naive")
 
 Map2=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
 Map1=Map2
 
 for (i in 1:length(DNames)){
-Map1[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[2])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
+Map1[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[i])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
 Map2[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) cor(SRTdfcastTum2[ ,x], as.numeric(pull(SRTThorsson2, DNames[i])), use="complete"))
 }
 
@@ -405,20 +465,53 @@ heatmap.2(Map3, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA
 
 ```
 
+Repeat the above using a linear model that accounts for stage as well
+
+```{r, results='hide', fig.height=5, fig.width=8}
+Map1B=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
+Map2B=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
+StageVar=BrClin$Stage[match(substr(rownames(SRTdfcastCall2), 1, 12), BrClin$Patient.ID)]
+
+for (i in 1:length(DNames)){
+  x1= lapply(1:ncol(SRTdfcastTum2) , function(x) glm(scale(as.numeric(pull(SRTThorsson2, DNames[i])))~StageVar+SRTdfcastCall2[, x]))
+  x2=sapply(x1, function(x) nrow(summary(x)$coefficients))
+  Map1B[i, ]=sapply(x1, function(x) summary(x)$coefficients[x2[1],4])       
+  Map2B[i, ]=sapply(x1, function(x) summary(x)$coefficients[x2[1],1])       
+}
+
+Map3B=Map2B
+Map3B[which(Map1B>0.05, arr.ind=T)]=0
+colnames(Map3B)=WindowNarrow$cytoband
+rownames(Map3B)=DNames
+Map3B[which(Map3B>1, arr.ind=T)]=1
+Map3B[which(Map3B<(-1), arr.ind=T)]=1
+par(oma=c(2, 0,0,2))
+heatmap.2(Map3B, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA, main="ER+ TCGA cohort")
+
+```
+
 ```{r}
 a1=which(WindowReg$padj<Pthresh)
 WindowReg$TCGA.ERpos.Cor.TILFrac=""
-WindowReg$TCGA.ERpos.Cor.TILFrac[a1]=Map2[1, ]
+WindowReg$TCGA.ERpos.Cor.TILFrac[a1]=Map2B[1, ]
 WindowReg$TCGA.ERpos.Cor.Macrophage=""
-WindowReg$TCGA.ERpos.Cor.Macrophage[a1]=Map2[2, ]
+WindowReg$TCGA.ERpos.Cor.Macrophage[a1]=Map2B[2, ]
 WindowReg$TCGA.ERpos.Cor.LIscore=""
-WindowReg$TCGA.ERpos.Cor.LIscore[a1]=Map2[3, ]
+WindowReg$TCGA.ERpos.Cor.LIscore[a1]=Map2B[3, ]
 WindowReg$TCGA.ERpos.Cor.IFNG=""
-WindowReg$TCGA.ERpos.Cor.IFNG[a1]=Map2[4, ]
+WindowReg$TCGA.ERpos.Cor.IFNG[a1]=Map2B[4, ]
 WindowReg$TCGA.ERpos.Cor.TGFB=""
-WindowReg$TCGA.ERpos.Cor.TGFB[a1]=Map2[5, ]
+WindowReg$TCGA.ERpos.Cor.TGFB[a1]=Map2B[5, ]
 WindowReg$TCGA.ERpos.Cor.WoundHealing=""
-WindowReg$TCGA.ERpos.Cor.WoundHealing[a1]=Map2[6,  ]
+WindowReg$TCGA.ERpos.Cor.WoundHealing[a1]=Map2B[6,  ]
+WindowReg$TCGA.ERpos.Cor.CTL=""
+WindowReg$TCGA.ERpos.Cor.CTL[a1]=Map2B[7,  ]
+WindowReg$TCGA.ERpos.Cor.Activated=""
+WindowReg$TCGA.ERpos.Cor.Activated[a1]=Map2B[8,  ]
+WindowReg$TCGA.ERpos.Cor.Inhibitory=""
+WindowReg$TCGA.ERpos.Cor.Inhibitory[a1]=Map2B[9,  ]
+WindowReg$TCGA.ERpos.Cor.Exhausted=""
+WindowReg$TCGA.ERpos.Cor.Exhausted[a1]=Map2B[10,  ]
 ```
 
 
@@ -429,14 +522,14 @@ SRTdfcastTum2=t(SRTdfcastTum[ ,idxM])
 SRTdfcastCall2=t(SRTdfcastCall[ ,idxM])
 #RTdfcastTum2$Immune=(as.numeric(SRTThorsson$`Lymphocyte Infiltration Signature Score`))
 
-DNames=c("TIL Regional Fraction", "Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
-         "TGF-beta Response", "Wound Healing")
+# DNames=c("TIL Regional Fraction", "Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
+#          "TGF-beta Response", "Wound Healing")
 
 Map2=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
 Map1=Map2
 
 for (i in 1:length(DNames)){
-Map1[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[2])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
+Map1[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[i])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
 Map2[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) cor(SRTdfcastTum2[ ,x], as.numeric(pull(SRTThorsson2, DNames[i])), use="complete"))
 }
 
@@ -450,20 +543,54 @@ heatmap.2(Map3, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA
 
 ```
 
+
+```{r, results='hide', fig.height=5, fig.width=8}
+Map1B=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
+Map2B=matrix(NA, ncol=ncol(SRTdfcastTum2), nrow=length(DNames))
+StageVar=BrClin$Stage[match(substr(rownames(SRTdfcastCall2), 1, 12), BrClin$Patient.ID)]
+
+for (i in 1:length(DNames)){
+  x1= lapply(1:ncol(SRTdfcastTum2) , function(x) glm(scale(as.numeric(pull(SRTThorsson2, DNames[i])))~StageVar+SRTdfcastCall2[, x]))
+  x2=sapply(x1, function(x) nrow(summary(x)$coefficients))
+  Map1B[i, ]=sapply(x1, function(x) summary(x)$coefficients[x2[1],4])       
+  Map2B[i, ]=sapply(x1, function(x) summary(x)$coefficients[x2[1],1])       
+# Map1B[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) JT.test(as.numeric(pull(SRTThorsson2, DNames[2])), SRTdfcastCall2[, x], labs=c("-1", "0", "1"))$p.value)
+# Map2[i, ]=sapply(1:ncol(SRTdfcastTum2), function(x) cor(SRTdfcastTum2[ ,x], as.numeric(pull(SRTThorsson2, DNames[i])), use="complete"))
+}
+
+Map3B=Map2B
+Map3B[which(Map1B>0.05, arr.ind=T)]=0
+colnames(Map3B)=WindowNarrow$cytoband
+rownames(Map3B)=DNames
+Map3B[which(Map3B>1, arr.ind=T)]=1
+Map3B[which(Map3B<(-1), arr.ind=T)]=1
+par(oma=c(4, 0,0,2))
+heatmap.2(Map3B, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA, main="ER- TCGA cohort")
+
+```
+
 ```{r}
 a1=which(WindowReg$padj<Pthresh)
 WindowReg$TCGA.ERneg.Cor.TILFrac=""
-WindowReg$TCGA.ERneg.Cor.TILFrac[a1]=Map2[1, ]
+WindowReg$TCGA.ERneg.Cor.TILFrac[a1]=Map2B[1, ]
 WindowReg$TCGA.ERneg.Cor.Macrophage=""
-WindowReg$TCGA.ERneg.Cor.Macrophage[a1]=Map2[2, ]
+WindowReg$TCGA.ERneg.Cor.Macrophage[a1]=Map2B[2, ]
 WindowReg$TCGA.ERneg.Cor.LIscore=""
-WindowReg$TCGA.ERneg.Cor.LIscore[a1]=Map2[3, ]
+WindowReg$TCGA.ERneg.Cor.LIscore[a1]=Map2B[3, ]
 WindowReg$TCGA.ERneg.Cor.IFNG=""
-WindowReg$TCGA.ERneg.Cor.IFNG[a1]=Map2[4, ]
+WindowReg$TCGA.ERneg.Cor.IFNG[a1]=Map2B[4, ]
 WindowReg$TCGA.ERneg.Cor.TGFB=""
-WindowReg$TCGA.ERneg.Cor.TGFB[a1]=Map2[5, ]
+WindowReg$TCGA.ERneg.Cor.TGFB[a1]=Map2B[5, ]
 WindowReg$TCGA.ERneg.Cor.WoundHealing=""
-WindowReg$TCGA.ERneg.Cor.WoundHealing[a1]=Map2[6,  ]
+WindowReg$TCGA.ERneg.Cor.WoundHealing[a1]=Map2B[6,  ]
+WindowReg$TCGA.ERneg.Cor.CTL=""
+WindowReg$TCGA.ERneg.Cor.CTL[a1]=Map2B[7,  ]
+WindowReg$TCGA.ERneg.Cor.Activated=""
+WindowReg$TCGA.ERneg.Cor.Activated[a1]=Map2B[8,  ]
+WindowReg$TCGA.ERneg.Cor.Inhibitory=""
+WindowReg$TCGA.ERneg.Cor.Inhibitory[a1]=Map2B[9,  ]
+WindowReg$TCGA.ERneg.Cor.Exhausted=""
+WindowReg$TCGA.ERneg.Cor.Exhausted[a1]=Map2B[10,  ]
 ```
 
 
@@ -500,7 +627,7 @@ dfAbbaCNVcastCall=acast(dfAbbaCNV, Pat~Reg, value.var='Call')
 
 AbbaClin2B=AClin2[match(rownames(dfAbbaCNVcast), AClin2$SampleID), ]
 
-DNames=colnames(AbbaClin2B)[c(5, 15:19)]
+DNames=colnames(AbbaClin2B)[c(5, 8:18)]
 Map2=matrix(NA, ncol=ncol(dfAbbaCNVcast), nrow=length(DNames))
 Map1=Map2
 
@@ -517,6 +644,30 @@ rownames(Map3)=DNames
 par(oma=c(4, 0,0,2))
 heatmap.2(Map3, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv=NA, main="Abba cohort of DCIS")
 ```
+
+```{r, results='hide', message=F, fig.height=5}
+
+Map1B=matrix(NA, ncol=ncol(dfAbbaCNVcast), nrow=length(DNames))
+Map2B=matrix(NA, ncol=ncol(dfAbbaCNVcast), nrow=length(DNames))
+
+for (i in 1:length(DNames)){
+  x1= lapply(1:ncol(dfAbbaCNVcastCall) , function(x) glm(scale(as.numeric(pull(AbbaClin2B, DNames[i])))~dfAbbaCNVcastCall[, x]))
+  x2=sapply(x1, function(x) nrow(summary(x)$coefficients))
+  Map1B[i, ]=sapply(1:length(x1), function(x) summary(x1[[x]])$coefficients[x2[x],4])       
+  Map2B[i, ]=sapply(1:length(x1), function(x) summary(x1[[x]])$coefficients[x2[x],1])       
+}
+
+Map3B=Map2B
+Map3B[which(Map1B>0.05, arr.ind=T)]=0
+colnames(Map3B)=WindowNarrow$cytoband
+rownames(Map3B)=DNames
+Map3B[which(Map3B>1, arr.ind=T)]=1
+Map3B[which(Map3B<(-1), arr.ind=T)]=1
+par(oma=c(4, 0,0,2))
+heatmap.2(Map3B, col=RdBu[11:1], scale="none", trace="none", Colv = NA, Rowv = NA, main="Abba", symm = T, symbreaks = T)
+
+```
+
 
 Due to small sample size, few associations are noted in the DCIS. In the IDC cases, a negative association with 1q is noted regardless of ER subtype. More associations were observed in the ER- cases including a positive association in 3p and 4q (these are CXCL clusters where chromosomal loss is specific to ER- breast cancers)
 
@@ -536,6 +687,14 @@ WindowReg$Abba.Cor.IFNG=""
 WindowReg$Abba.Cor.IFNG[a1]=Map2[5, ]
 WindowReg$Abba.Cor.WoundHealing=""
 WindowReg$Abba.Cor.WoundHealing[a1]=Map2[6, ]
+WindowReg$Abba.Cor.CTL=""
+WindowReg$Abba.Cor.CTL[a1]=Map2[7,  ]
+WindowReg$Abba.Cor.Activated=""
+WindowReg$Abba.Cor.Activated[a1]=Map2[8,  ]
+WindowReg$Abba.Cor.Inhibitory=""
+WindowReg$Abba.Cor.Inhibitory[a1]=Map2[9,  ]
+WindowReg$Abba.Cor.Exhausted=""
+WindowReg$Abba.Cor.Exhausted[a1]=Map2[10,  ]
 
 temp=mcols(WindowReg)
 TabB=cbind(Tab, temp)

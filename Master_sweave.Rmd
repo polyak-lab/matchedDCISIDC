@@ -1,0 +1,1383 @@
+---
+title: "The DCIS-IDC transition shaped by the immune system"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    theme: yeti
+    fig_width: 9
+    fig_height: 4
+    fig_caption: true
+    df_print: paged
+    code_folding: hide
+    toc_float: true 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo =T, message = F, warning=F)
+# list all libraries and packages needed
+library(RColorBrewer)
+
+RdBu=brewer.pal(11, "RdBu")
+ColChangeIdx=c(1,7, 2, 8, 3, 9, 4,  10, 5, 11, 6, 12)
+PatNames=c(1, 2, 3, 5, 8, 9)
+palette(brewer.pal(12, "Set3"))
+dcisidcCol=c("#fa9fb5", "#dd3497")
+#SeqOnt=c("frameshift deletion", "frameshift insertion", "missense", "stop gained", "splice site")
+
+SeqOnt=c("Frame_Shift_Del","Frame_Shift_Ins", "Missense_Mutation", "Nonsense_Mutation", "Splice_Site")
+
+```
+
+
+# Summary of data and tools
+
+This document describes the code used to generate all plots in Trinh et al, **"The genomic landscape of the in situ to invasive ductal carcinoma transition shaped by the immune system"** 
+
+## Required software and packages
+
+The following R packages are used in this study:
+
+```{r, echo=T, warning=F, message=F}
+# Packages used
+library(copynumber)
+library(reshape2)
+library(ggplot2)
+library(readxl) 
+library(rjson)
+library(DESeq2)
+library(grid)
+library(edgeR)
+library(spatstat)
+library(GSEABase)
+library(GSVA)
+library(HTSanalyzeR2)
+library(gplots)
+library(betareg)
+library(RecordLinkage)
+library(stringi)
+library(ggrepel)
+library(SAGx)
+library(dplyr)
+library(VGAM)
+library(divo)
+library(abind)
+library(colorspace)
+library(knitr)
+```
+
+The following packages were used for the following specific analyses
+
+|Package | Function |
+|--------|------------------------------------------------|
+|spatstat, divo| Spatial analysis (knn-distances), Morisita-Horn distances|
+|GSVA, HTSAnalyzeR2| (single sample) gene set enrichment analysis, network graph visualisation |
+|copywriter, copynumber | visualisation of CN profiles compared to normal, visualisation of CN profiles in population|
+|DESeq2, edgeR| RNA-seq library normalisation, conversion to rpkm, differential gene expression analysis|
+|SAGx| Joncheree Terpsa Test for trend|
+|betareg|beta-regression to compare [0, 1] data|
+
+Additionally, the following external software was used:
+
+|Software| Function |
+|--------|-----------------------------------------------------------------------|
+|[GATK4](https://software.broadinstitute.org/gatk/)| CNV and Mutation calling |
+|[Polysolver](https://software.broadinstitute.org/cancer/cga/polysolver) | inferring HLA types|
+|[NetMHCPan4](http://www.cbs.dtu.dk/services/NetMHCpan-4.0) | estimating binding affinities of peptides to HLA-types|
+|[SIFT](https://sift.bii.a-star.edu.sg/www/SIFT_indels2.html) | predicting amino acid sequences from frameshift mutations|
+|[CIBERSORT](https://cibersort.stanford.edu/) | inferring immune composition from RNA|
+|[Oncotator](https://gatkforums.broadinstitute.org/gatk/discussion/4154/howto-install-and-run-oncotator-for-the-first-time) | Annotation of genetic variants|
+|[CRAVAT](https://github.com/KarchinLab/open-cravat) | Annotation of genetic variants|
+|[STAR](https://github.com/alexdobin/STAR) | Alignment of RNAseq data|
+|[RSEM](https://github.com/deweylab/RSEM)|Calculate TPM from RNAseq data|
+|[Phylowgs](https://github.com/morrislab/phylowgs)| Inference of phylogeny from mutation and/or copy number data|
+|[MIXCR](https://mixcr.readthedocs.io/en/master/) | assignment of T and B cell clonotypes from RNA-seq data |
+|[Phenograph](https://github.com/JinmiaoChenLab/Rphenograph) | Clustering of high-dimensional phenotypic data (cytof or cycIF)|
+|[QuPath](https://qupath.github.io/)| Tool for cell segmentation and extraction of features from H\& E images |
+|[samtools, bcftools](http://www.htslib.org/)| querying and dispalying information from bam files, extracting allelic depth at specific genomic locations |
+
+Additional in-house functions used are found in R scripts folder
+```{r}
+source("extra_functions.R")
+```
+
+## Biological Annotation
+
+A number of databases were used to extract gene signatures and other profiles
+
+### Gene sets and data bases
+
+Gene sets/signatures were obtained from the following sources:
+
+|Source | Description      |
+|-------|------------------------|
+|[IEDB](https://www.iedb.org/)| database of immune epitopes |
+|[MsigDB](http://software.broadinstitute.org/gsea/msigdb/index.jsp) | c2 set of curated pathway gene sets |
+|[COSMIC](https://cancer.sanger.ac.uk/census) |database of concensus oncogenes|
+|[ImmPort](https://www.immport.org/home)| List of immune related genes |
+|[InnateDB](https://www.innatedb.com/) | List of genes associated with innate immune system|
+|[Rosenthal 2019](https://dx.doi.org/10.1038/s41586-019-1032-7) | genes associated with MHC-I presentation |
+|[Thorsson 2018](http://dx.doi.org/10.1016/j.immuni.2018.03.023) | Immune gene signatures curated from studies by Wolf, Calabro, Teschendorff, Beck, Chang |
+| [Pardoll](https://www.ncbi.nlm.nih.gov/pubmed/22437870), [Wykes](https://www.ncbi.nlm.nih.gov/pubmed/28990586) | Immune checkpoint genes| 
+| [gil del alcazar 2017](https://cancerdiscovery.aacrjournals.org/content/early/2017/09/19/2159-8290.CD-17-0222) | Supplementary table 5: list of activation, dysfunction gene signatures |
+
+
+```{r}
+## List of Oncogenes
+OncoList=read.csv("geneLists//Census_COSMIC_Feb2020.csv")
+## Immune related genes
+ImmGenes=read.csv("geneLists//innatedb_curated_genes.csv")
+ImmGenes2=read.csv("geneLists//ImmPort_Set.csv")
+ListGenesImm=unique(toupper(c(as.character(ImmGenes2$Symbol),as.character(ImmGenes$Gene.Symbol))))
+# Read in the List used in DCIS papers
+Exp2=read.csv("geneLists//Supplementary Table 5.csv")
+Exp2List=lapply(1:ncol(Exp2), function(x) setdiff(unique(Exp2[ ,x]), ""))
+names(Exp2List)=colnames(Exp2)
+
+List2=read.csv("geneLists/Thorsson_signatures.csv")
+List2b=lapply(1:ncol(List2), function(x) setdiff(unique(List2[ ,x]), ""))
+names(List2b)=colnames(List2)
+Exp2List=c(Exp2List, List2b)
+
+ImmSuppAPC=read.delim("geneLists//immune_Suppression.csv", header=T, stringsAsFactors = F, sep=",")
+ImmSuppAPC=lapply(1:ncol(ImmSuppAPC), function(x) setdiff(unique(ImmSuppAPC[ ,x]), ""))
+
+MHCpres=read.csv("geneLists/MHCloss.csv", header=F)
+MHCpres=MHCpres[ ,1]
+
+Exp2List[[12]]=as.character(MHCpres)
+Exp2List[[13]]=ImmSuppAPC[[1]]
+names(Exp2List)[12:13]=c("MHCloss", "ImmSupp")
+
+```
+
+
+```{r}
+## MSigDB pathways:
+PathIn=getGmt(con="geneLists/c2.cp.v7.0.symbols.gmt", geneIdType=SymbolIdentifier(),
+                collectionType=BroadCollection(category="c2"))
+
+c2entrez=mapIdentifiers(PathIn, EntrezIdentifier('org.Hs.eg.db'))
+c2List=geneIds(c2entrez)
+```
+
+
+### Genomic Annotation
+
+Find genomic locations and gene lengths of all genes
+
+The following annotation data for the hg19/b37/GRCh37 genome is required:
+
+|Data Type| Description|
+|--------|-----------------|
+|gene lengths| Extracted from GRCh37.75.gtf file from [ensembl](ftp://ftp.ensembl.org/pub/grch37/current/gtf/homo_sapiens/)|
+|hg19cytoBand | [ucsc server](http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz) of all cytoband locations  |
+|chromosome sizes | [uscs genome browser](http://hgdownload.cse.ucsc.edu/goldenPath/hg19/database/chromInfo.txt.gz) |
+|[biomart](https://bioconductor.org/packages/release/bioc/html/biomaRt.html)| conversion between gene symbol, ensbl and entrez was faciliated using biomart package |
+
+Below is code to 1. extract gene lengths, 2. determine the genomic location of all genes, 3. narrow down a list of immune related genes 4. Create a GRanges object of all coding genes for subsequent analysis
+
+```{r}
+## Commented out: how to construct the annotation file
+# tx37=makeTxDbFromGFF("Homo_sapiens.GRCh37.75.gtf")
+# tx37=genes(tx37)
+# tx37=sort(tx37)
+# 
+# ## extract gene lengths:
+# 
+# ## match the hugo symbols if possible
+# RNames2=read.csv("annotations/gene_name_ensb_hugo.csv")
+# tx37$HUGO=RNames2$hugo[match(tx37$gene_id, RNames2$ensb)]
+# save(tx37, file="annotations/txdb_ensb_37.RData")
+
+# gene length information
+
+load("annotations/txdb_ensb_37.RData")
+#gene_lengths <- width(tx37)
+tx37$gene_legth=width(tx37)
+#names(gene_lengths)=tx37$gene_id
+
+# get list of all genes and convert to symbol
+AllImm=unique(unlist(ListGenesImm))
+
+ImmSpec=tx37[na.omit(match(AllImm, tx37$HUGO))]
+ImmSpec=sort(ImmSpec)
+
+theseChrom=levels(seqnames(ImmSpec))[1:23]
+ImmSpec2=ImmSpec[as.character(seqnames(ImmSpec))%in%theseChrom]
+ImmSpec2$Segment_Mean=2
+seqlevelsStyle(ImmSpec2)="NCBI"
+
+# Annotate chromosomal length and locations of centromeres
+
+chrInfo=read.delim("annotations//chromosome_summary.txt", sep="\t", stringsAsFactors = F)
+Cytobands=read.delim("annotations//hg19cytoBand.txt", sep="\t", header=F)
+mx1=grep("q", Cytobands$V4)
+setd1=mx1[2:length(mx1)]-mx1[1:(length(mx1)-1)]
+mx2=which(setd1>1)
+CytoLoc=Cytobands[ mx1[c(1, mx2+1)], ]
+CytoLoc$V1=gsub("chr", "", CytoLoc$V1)
+Cytobands$Descriptor=paste(substr(Cytobands$V1, 4,5), Cytobands$V4, sep="")
+Cytobands$Desc2=sapply(strsplit(Cytobands$Descriptor, "\\."), function(x) x[1])
+ImmSpec2$LvlAdd=as.numeric(chrInfo$sumdist[as.numeric(match(seqnames(ImmSpec2), chrInfo$Chromosome))])
+
+#create a granges object for each sample, with list of known oncogenes and match the copy number inferred data
+
+CytoGR=GRanges(seqnames = Cytobands$V1, ranges=IRanges(start=Cytobands$V2, end=Cytobands$V3), Reg=paste(substr(Cytobands$V1,4,5), Cytobands$V4, sep=""), Desc=Cytobands$Desc2)
+CytoGR<- sortSeqlevels(CytoGR)
+CytoGR=sort(CytoGR)
+
+
+# find the breast specific genes
+breastGeneList=unique(c(as.character(OncoList$Gene.Symbol[c(grep("breast", OncoList$Tumour.Types.Germline.),grep("breast", OncoList$Tumour.Types.Somatic.) )]),"MYC", "FGFR1", "FGFR2", "KMT2C"))
+m1=match(breastGeneList, tx37$HUGO)
+
+txOncoList=tx37[na.omit(match(OncoList$Gene.Symbol, tx37$HUGO))]
+```
+
+
+## Patient cohorts
+
+Below is a summary of the patient cohort of interest: There are 6 patients with matched DCIS and recurrent IDC. Plotted below is a summary of patient subtype, treatment and time to relapse
+
+
+```{r, fig.height=4}
+PatInfo=read.csv("data/RecurrenceCohort/patientInformation.csv")
+
+#PatInfo$Time=PatInfo$Time
+PatInfo$Case=factor(PatInfo$Case)
+PatInfo$Treatment=ifelse(PatInfo$Adjuvant!="", paste(PatInfo$Treatment, PatInfo$Adjuvant, sep="+"), as.character(PatInfo$Treatment))
+PatInfo$Start=0
+
+PatInfo2=PatInfo
+PatInfo2$Start=3
+PatInfo2$SubTypeDCIS=PatInfo$SubtypeIDC
+PatInfo2$Treatment=""
+PatInfo$Recurrence=""
+
+PatInfo$Time=0
+PatInfo=rbind(PatInfo, PatInfo2)
+ggplot(PatInfo, aes(x=Time, y=Case, col=SubTypeDCIS))+geom_point(aes(size=5), shape=15)+geom_text(aes(x=Time, y=Case, label = Treatment), check_overlap = TRUE, hjust="left", vjust="bottom")+geom_text(aes(x=Time, y=Case, label = Recurrence), hjust="left", vjust="top")+ theme_bw()+geom_line(aes(group=Case),arrow = arrow(length=unit(0.3,"cm"), ends="last", type = "closed"), colour="gray35",  size=1.5)
+
+```
+
+We have also utilised the following cohorts:
+
+| Dataset |Description             |
+|------|----------------------------------|
+|[Abba 2015, Cancer Res](http://dx.doi.org/10.1158/0008-5472.CAN-15-0506) | Cohort of ~30 HG-DCIS with RNAseq, exome and clinical data |
+|[Thorsson 2018, Immunity](http://dx.doi.org/10.1016/j.immuni.2018.03.023)| Pan-cancer analysis of the TCGA cohort, including HLA and neoantigen prediction |
+|[TCGA 2012, Nature](https://www.nature.com/articles/nature11412)| 1200 cases obtained from the TCGA study: mutation, CNV, gene expression data |
+| [Lesurf, Cell Rep](https://www.sciencedirect.com/science/article/pii/S2211124716308051) | Cohort of ~50 DCIS lesions for switch aCGH and microarray data is available |
+
+The meta-data files for these other cohorts are loaded here, and a summary of the number of patients as follows:
+
+```{r}
+AbbaClin=read_xlsx("data/Abba2015/GSE69994_Supplementary_Data1_Samples_data.xlsx")
+load("data/DontUpload//BrClin_clinical_Nov2017.RData")
+ThorssonTab=read_xlsx("data/TCGA/thorsson/other_data/Thorsson2018_table1.xlsx", sheet=1)
+ThorssonTab=ThorssonTab[ThorssonTab$`TCGA Study`=="BRCA", ]
+load("data/Lesurf/dcis_annot.RData")
+df1=data.frame(DataSet=c("recurrence", "Abba", "TCGA", "Thorsson", "Lesurf"), 
+               NPat=c(6,length(which(AbbaClin$Description=="pure HG-DCIS")), nrow(BrClin), nrow(ThorssonTab),nrow(dcis_annot)))
+
+kable(df1)
+```
+
+
+## Histology data
+
+Whole slide H\&E images were segmented using QuPath and cells were classified as epithelial/tumor, stroma and leukocytes using a random forest classifier implemented within the program. Saved csv files are loaded here, and a summary of the cell types on each tissue section is shown below
+
+```{r}
+qpathPal=c("#fdb462", "#984ea3","#8dd3c7")
+pathLocs="data/RecurrenceCohort/qupath/"
+basename.matches <- list.files(path=pathLocs, pattern=".csv", recursive=F,
+                               full.names = TRUE)
+
+QPs=lapply(basename.matches, function(x) read.csv(x))
+names(QPs)=unlist(strsplit(basename(basename.matches), ".csv"))
+
+SummaryQP=sapply(QPs, function(x) table(x$CellType))
+
+kable(SummaryQP)
+```
+
+Here is an example topology map and the proportion of cells in each section
+
+```{r, fig.width=9}
+par(mfrow=c(1,2))
+
+barplot(t(t(SummaryQP)/colSums(SummaryQP)), col=qpathPal, main="Tissue WSI", las=2, ylab="Proportion of cells")
+legend("topright", rownames(SummaryQP), col=qpathPal, pch=19, bty="n")
+
+plot(QPs[[8]]$CentroidX, QPs[[8]]$CentroidY, col=qpathPal[QPs[[8]]$CellType], main="example case 5 IDC", pch=".",
+     xlab="X Coord", ylab="Y Coord")
+```
+
+## Exome
+
+Summary of the exome data coverage
+
+```{r}
+DIn=read.csv("data/Exome_QC.csv")
+
+# barplot of mean target coverage
+barplot(DIn$hs_mean_target_coverage, ylab = "average coverage x", col=c(dcisidcCol, 3), names.arg = DIn$sample_alias, las=2)
+abline(v=c(3.2, 6.8, 10.4, 14, 17.6)+0.5, lty=2)
+
+# compare the percent target bases
+Pct=t(DIn[ ,c(6:11)])
+colnames(Pct)=DIn$sample_alias
+CNames=sapply(strsplit(rownames(Pct), "_"), function(x) x[length(x)])
+Pct=cbind(Pct, as.numeric(substr(CNames, 1, nchar(CNames)-1)))
+
+
+par(mfrow=c(2, 3))
+
+for (i in 1:18){
+  if (i%%3==1){
+    plot(Pct[ ,19], Pct[ ,i], xlim=c(0, 100), ylim=c(0, 1), xlab="coverage", ylab="% target bases", col=dcisidcCol[1], type="l",
+         main=sprintf("Case %s", ((i-1)/3)+1))
+  } else if (i%%3==2){
+   lines(Pct[ ,19], Pct[ ,i], type='l', col=dcisidcCol[2])
+  } else {
+    lines(Pct[ ,19], Pct[ ,i], type='l', col=3)
+  }
+}
+
+```
+
+## Copy Number
+
+CNVs were inferred using matched normal-tumor WES data using GATK CNV for our dataset of interest as well as the Abba cohort.
+
+```{r}
+## Our cohort
+#FilesPath="data/gatkACNV//" # USE THIS?
+FilesPath="data/RecurrenceCohort/recurrence_gatk//" ##"data/RecurrenceCohort/acapseg_recurrence//" ## USE THISSSS!!
+FilesIn=dir(FilesPath, pattern="new")
+
+CNVRec=list() 
+
+for (i in 1:length(FilesIn)){
+  CNVRec[[i]]=read.delim(file.path(FilesPath, FilesIn[i]), skip = 87)
+  #load(file.path(FilesPath, FilesIn[i]))
+}
+
+sNames=regmatches( FilesIn, regexpr("[0-9][A-Z]{3,4}", FilesIn)) #sNames=sapply(strsplit(FilesIn, "\\."), function(x) x[1])#regmatches( FilesIn, regexpr("[0-9][A-Z]{3,4}", FilesIn))
+names(CNVRec)=sNames
+
+CNVRecGRanges=lapply(CNVRec, function(x) GRanges(seqnames = x$CONTIG, ranges=IRanges(start=x$START, end=x$END), total_copy_ratio=x$MEAN_LOG2_COPY_RATIO, call=x$CALL))
+
+
+## Abba cohort
+APath="data/Abba2015/Abba_CNV_gatk/" #"data/Abba2015/acapseg/" #"~/Downloads/acapseg/" #"data/Abba2015/Abba_CNV_gatk/called_Regions/" # #"data/Abba2015/Abba_CNVs/"  #Abba_CNV_gatk/called_Regions/" # USE THIS ONE?
+FilesIn=dir(APath, pattern =".seg")
+
+AbbaCNV=list()
+
+for (i in 1:length(FilesIn)){
+  AbbaCNV[[i]]=read.delim(file.path(APath, FilesIn[i]), skip=87)
+}
+
+names(AbbaCNV)=AbbaClin$SampleID[match(substr(sapply(strsplit(FilesIn, "\\."), function(x) x[1]), 6, 20), AbbaClin$`Original ID`)]
+
+AbbaGRanges=lapply(AbbaCNV, function(x) GRanges(seqnames = x$CONTIG, ranges=IRanges(start=x$START, end=x$END), total_copy_ratio=x$MEAN_LOG2_COPY_RATIO, call=x$CALL))
+```
+
+The Lesurf dataset is comprised on DCIS which were profiled using SNP6 arrays, and the data was provided as pre-processed LogR ratios
+
+```{r}
+## Lesurf dataset
+load("data/Lesurf/dcis_logr_data.RData")
+load("data/Lesurf/gene_annot.RData")
+load("data/Lesurf/dcis_expr_data.RData")
+```
+
+## Mutation and Neoantigen data
+
+Mutations were called using a combination of Mutect, Mutect2 and Strelka. Filter out variants based on ffpeOBF, oxogBF, blat and PoN filters unless they appear in both the DCIS and IDC. 
+
+```{r}
+MutPath="data/RecurrenceCohort/merged_mafs/"
+Mutfiles=dir(MutPath, "*.maf")
+Mutall=lapply(Mutfiles, function(x) read.delim(paste(MutPath, x, sep=""), sep="\t", header=T))
+names(Mutall)=sapply(strsplit(Mutfiles, "_"), function(x) x[1])
+
+Mutall2=lapply(Mutall, function(x) x[which(x$Failed_Filters=="") ,])
+
+Conserved1=lapply(seq(1, 11, by=2), function(x) Mutall[[x]][(which(Mutall[[x]]$Start_position%in%Mutall[[x+1]]$End_position)), ])
+Conserved2=lapply(seq(2, 12, by=2), function(x) Mutall[[x]][(which(Mutall[[x]]$Start_position%in%Mutall[[x-1]]$End_position)), ])
+
+KeepD=lapply(Conserved1, function(x) x[which(x$Failed_Filters!=""), ])
+KeepD2=lapply(Conserved2, function(x) x[which(x$Failed_Filters!=""), ])
+
+KeepAll=c(KeepD, KeepD2)
+KeepAll2=KeepAll[c(1, 7, 2, 8, 3, 9, 4, 10, 5, 11, 6, 12)]
+
+Mutall2=Map(rbind, Mutall2, KeepAll2)
+
+MI1a=c(sapply(Mutall2, function(x) length(unique(x$Start_position))))
+MI2a=c(sapply(Mutall2, function(x) length(unique(x$Start_position[x$Variant_Classification%in%SeqOnt]))))
+MI3=c(sapply(Mutall2, function(x) length(unique(x$Start_position[x$Variant_Type=="SNP"]))))
+MI4=c(sapply(Mutall2, function(x) length(unique(x$Start_position[x$Variant_Type!="SNP"]))))
+MI5=c(sapply(Mutall2, function(x) length(unique(x$Start_position[which(x$Variant_Classification%in%SeqOnt & x$dbSNP_RS=="" )]))))
+
+MutTableR=rbind(MI1a, MI3, MI4,  MI2a, MI5)
+rownames(MutTableR)=c("all","SNP", "indel","pathologic includ SNPs", "coding")
+
+kable(MutTableR)
+
+par(mfrow=c(1,2))
+barplot(MutTableR, beside=T, ylab="log10 number of mutations", col=brewer.pal(5, "RdYlBu"), 
+        names.arg = paste(rep(c(1:3, 5, 8:9), each=2), c("DCIS", "IDC")), las=2, log="y", xlim=c(0, ncol(MutTableR)*6+2), legend.text = T,
+        args.legend=list(x=ncol(MutTableR)*6 + 2, y=1000, bty = "n"))
+
+alllvl=unique(unlist(sapply(Mutall2, function(x) levels(x$Variant_Classification))))
+VarType=sapply(Mutall2, function(x) table(factor(x$Variant_Classification, levels=alllvl)))
+lx1=colSums(VarType)
+barplot(t(t(VarType)/lx1), xlim=c(0, nrow(VarType)+3), col=c(1:12), las=2, legend.text = T, args.legend=list(x=nrow(VarType) + 3, y=1, bty = "n"))
+```
+
+
+Note that there appears to be a shift in VAF between DCIS and IDC. In most cases the VAF is shifted left for the IDC - this could be a reflection of more clonal mutations in the DCIS or higher heterogeneity in the DCIS. The exception to this the lymph node recurrence and case 2 and case 3 which is non significant
+
+```{r, fig.width=6}
+repKS=rep(NA, 6)
+
+VarFreq=sapply(Mutall2, function(x) x$t_alt_count/(x$t_alt_count+x$t_ref_count))
+
+pairedCols=brewer.pal(12, "Paired")
+
+plot(NA, xlim=c(0, 1), ylim=c(0, 1), xlab="VAF", ylab="CDF", main="VAF distribution")
+ 
+for (i in 1:12){
+ lines(ecdf(VarFreq[[i]]), col=pairedCols[i], lwd=1, pch=20)
+}
+legend("bottomright", legend=names(Mutall2), col= pairedCols, pch=19)
+
+for (i in 1:6){
+repKS[i]=ks.test(VarFreq[[(i*2)-1]], VarFreq[[(i*2)]])$p.value
+}
+
+repKS
+```
+
+
+Below are the mutations found in the Abba dataset: 
+Note that 4 samples appear problematic and are exluded from analysis
+
+```{r, cache=T}
+MutPath="data/Abba2015/oncotator_mut/"
+Mutfiles=dir(MutPath, "*.maf")
+AMutall=lapply(Mutfiles, function(x) read.delim(paste(MutPath, x, sep=""), sep="\t", header=T))
+names(AMutall)=sapply(strsplit(Mutfiles, "\\."), function(x) x[1])
+
+MI1=c(sapply(AMutall, function(x) length(unique(x$Start_position))))
+MI2=c(sapply(AMutall, function(x) length(unique(x$Start_position[x$Variant_Classification%in%SeqOnt]))))
+MI3=c(sapply(AMutall, function(x) length(unique(x$Start_position[x$Variant_Type=="SNP"]))))
+MI4=c(sapply(AMutall, function(x) length(unique(x$Start_position[x$Variant_Type!="SNP"]))))
+MI5=c(sapply(AMutall, function(x) length(unique(x$Start_position[which(x$Variant_Classification%in%SeqOnt & x$dbSNP_RS=="" )]))))
+
+MutTable=rbind(MI1, MI3, MI4,  MI2, MI5)
+rownames(MutTable)=c("all","SNP", "indel","pathologic includ SNPs", "coding non SNP")
+
+barplot(MutTable+1, beside=T, ylab="log10 number of mutations", col=brewer.pal(5, "RdYlBu"), 
+        names.arg = colnames(MutTable), las=2, log="y", xlim=c(0, ncol(MutTable)*6+2), legend.text = T,
+        args.legend=list(x=ncol(MutTable)*6 + 2, y=1000, bty = "n"))
+
+```
+
+## Mutations in normal data
+
+
+We used HaplotypeCaller to determine coding variants in the normal samples . Below are the results from the recurrence set, showing how many variants are present in each case. They are overwhelmingly rsSNP sites, and do not appear to have a pathogenic effect. The top mutated genes are the mucin genes which are known to be highly variable, but the epigenetic regulator KMT2C also shows variation.
+
+```{r, fig.height=8, cache=T}
+Ont2=c("frameshift deletion", "frameshift insertion", "stop gained", "stop lost", "missense", "splice site")
+DCISNormals=read.delim("data/DontUpload//DCIS_cohort_normals_200103-140338_rmblank_coding.tsv", sep="\t")
+DCISNormals2=DCISNormals[which(DCISNormals$Sequence.Ontology%in%Ont2), ] # change this
+
+par(mfrow=c(2,2))
+
+## overview of the data:
+allPatDCIS=table(unlist(strsplit(as.character(DCISNormals2$Samples), ";")))
+barplot(allPatDCIS, las=2, ylab="germline mutations found in each sample")
+
+## overview of the clinical damage and rsSNP frequency
+rsFreq=table(DCISNormals2$rsID=="")
+
+barplot(rsFreq/sum(rsFreq), ylab="rsSNP location", names.arg = c("rsID", "non rsSNP"))
+
+clinsig=as.character(DCISNormals2$Clinical.Significance)
+clinsig[grep("protective", clinsig)]="protective"
+clinsig[grep("enign", clinsig)]="Benign"
+clinsig[grep("Conflicting", clinsig)]="Conflict"
+clinsig[grep("athogenic", clinsig)]="pathogenic"
+clinsig[grep("risk factor", clinsig)]="risk factor"
+clinsig[grep("association", clinsig)]="risk factor"
+clinsig[grep("Affects", clinsig)]="non-disease effect"
+clinsig[grep("not provided", clinsig)]=""
+clinsig[grep("other", clinsig)]="Uncertain significance"
+
+clinsig=table(clinsig)
+
+barplot(clinsig/sum(clinsig), ylab="mutation effect", las=2)
+
+## overview of most common mutations
+lx1=rep(as.character(DCISNormals2$Hugo),times=DCISNormals2$Sample.Count)
+nCount=sort(table(lx1), decreasing=T)
+#barplot(nCount[1:20], main="top mutated", las=2)
+
+ nCount2=nCount[names(nCount)%in%txOncoList$HUGO]
+ 
+ barplot(nCount2[1:20], main="top cancer related mutated", las=2)
+ nCount3=nCount[names(nCount)%in%c("KMT2C", breastGeneList)]
+ 
+ #barplot(nCount3[1:20], main="top breast-cancer related mutated", las=2)
+```
+
+In the Abba cohort, we see a similar pattern
+
+```{r, fig.height=8, cache=T}
+AbbaNormals=read.delim("data/DontUpload/VCF_normals_Abba_191205-175745_rm_blanks_coding2.tsv", sep="\t")
+AbbaNormals2=AbbaNormals[which(AbbaNormals$Sequence.Ontology%in%Ont2), ]
+
+par(mfrow=c(2,2))
+
+## overview of the data:
+allPatAbba=table(unlist(strsplit(as.character(AbbaNormals2$Samples), ";")))
+barplot(allPatAbba, las=2, ylab="germline mutations found in each sample")
+
+## overview of the clinical damage and rsSNP frequency
+rsFreq=table(AbbaNormals2$rsID=="")
+
+
+barplot(rsFreq/sum(rsFreq), ylab="rsSNP location", names.arg = c("rsID", "non rsSNP"))
+
+clinsig=as.character(AbbaNormals2$Clinical.Significance)
+clinsig[grep("protective", clinsig)]="protective"
+clinsig[grep("enign", clinsig)]="Benign"
+clinsig[grep("Conflicting", clinsig)]="Conflict"
+clinsig[grep("athogenic", clinsig)]="pathogenic"
+clinsig[grep("risk factor", clinsig)]="risk factor"
+clinsig[grep("association", clinsig)]="risk factor"
+clinsig[grep("Affects", clinsig)]="non-disease effect"
+clinsig[grep("not provided", clinsig)]=""
+clinsig[grep("other", clinsig)]="Uncertain significance"
+
+clinsig=table(clinsig)
+
+barplot(clinsig/sum(clinsig), ylab="mutation effect", las=2)
+
+lx1=rep(as.character(AbbaNormals2$Hugo),times=AbbaNormals2$Sample.Count)
+nCount=sort(table(lx1), decreasing=T)
+ nCount2=nCount[names(nCount)%in%txOncoList$HUGO]
+ 
+ barplot(nCount2[1:20], main="top cancer related mutated", las=2)
+nCount3=nCount[names(nCount)%in%c("KMT2C", breastGeneList)]
+
+
+```
+
+Make a merged table of the above mutations in the recurrence and Abba cohorts:
+
+```{r, eval=T}
+tempAb=AbbaNormals2[AbbaNormals2$Hugo%in%c("KMT2C", breastGeneList), c("Chrom.1", "Position.1","Ref.Base", "Alt.Base", "Coding","Hugo", "rsID", "Sequence.Ontology", "Protein.Change", "Prediction", "Clinical.Significance", "Samples", "Sample.Count")]
+
+ax1=unique(AbbaClin$`Original ID`)[2:31]
+nx1=paste("Normal", ax1, sep="")
+tx1=AbbaClin$SampleID[match(ax1, AbbaClin$`Original ID`)]
+
+for (i in 1:length(nx1)){
+  tempAb$Samples=gsub(nx1[i], tx1[i], tempAb$Samples)
+}
+
+tempB=DCISNormals2[DCISNormals2$Hugo%in%c("KMT2C", breastGeneList), c("Chrom.1", "Position.1","Ref.Base", "Alt.Base", "Coding","Hugo", "rsID", "Sequence.Ontology", "Protein.Change", "Prediction", "Clinical.Significance", "Samples", "Sample.Count")]
+
+AllM=unique(tempAb$Hugo, tempB$Hugo)
+
+nCountA=rep(as.character(tempAb$Hugo),times=tempAb$Sample.Count)
+nCountB=rep(as.character(tempB$Hugo),times=tempB$Sample.Count)
+
+rsIDA=rep(as.character(tempAb$rsID),times=tempAb$Sample.Count)
+rsIDB=rep(as.character(tempB$rsID),times=tempB$Sample.Count)
+
+predIDA=rep(as.character(tempAb$Clinical.Significance),times=tempAb$Sample.Count)
+predIDA[grep("enign", predIDA)]=""
+predIDA[grep("Uncertain", predIDA)]=""
+predIDA[grep("not provided", predIDA)]=""
+predIDB=rep(as.character(tempB$Clinical.Significance),times=tempB$Sample.Count)
+predIDB[grep("enign", predIDB)]=""
+predIDB[grep("not provided", predIDB)]=""
+predIDB[grep("Uncertain", predIDB)]=""
+
+d1=data.frame(nCountA, rsIDA, predIDA, rs2=ifelse(rsIDA=="", 0, 1))
+m1=rbind(table(d1$nCountA), table(d1$rs2, d1$nCountA), table(d1$predIDA, d1$nCountA))
+
+d2=data.frame(nCountB, rsIDB, predIDB, rs2=ifelse(rsIDB=="", 0, 1))
+m2=rbind(table(d2$nCountB), table(d2$rs2, d2$nCountB), table(d2$predIDB, d2$nCountB))
+
+dnew=rbind(cbind(t(m1[1:4, ]), set="Abba"), cbind(t(m2[1:4, ]), set="rec"))
+dnew=data.frame(cbind(dnew, rn=rownames(dnew)))
+dnewM=melt(dnew, measure.vars = c("V1", "X1", "V4"))
+
+V1=c(m1[1, ]/(max(m1[1, ])), m2[1, ]/(max(m2[1, ])))
+
+m2b=unique(names(sort(V1, decreasing = T)))
+
+dnewM$rn=factor(dnewM$rn, levels = m2b)
+
+ggplot(dnewM, aes(x=rn, y=as.numeric(value), fill=variable))+geom_bar(stat="identity", position='dodge')+theme_bw()+facet_grid(set~., scales = "free_y")+theme(axis.text.x=element_text(angle=90))+
+  scale_fill_discrete(name = "type", labels = c("variant", "rsSNP", "unknown pathogenicity"))
+```
+
+## Predicting HLAs 
+
+The first stage in predicting neoantigen load is calling HLAs based on exome bam files, which was performed using polysolver for both the recurrence and the Abba dataset.
+
+Below is a summary of the frequency of the different HLA alleles in this set
+
+```{r}
+# recurrence set
+
+HLAtypingpath="data/RecurrenceCohort/HLA/"
+HLAtypeFiles=dir(HLAtypingpath)
+
+HLAtemp=list()
+for (i in 1:length(HLAtypeFiles)){
+  HLAtemp[[i]]=read.delim(sprintf("%s%s", HLAtypingpath, HLAtypeFiles[i]), header=F, stringsAsFactors = F)[ ,1]
+}
+
+tSub=sapply(1:6, function(x) rep(PatNames[x], length(HLAtemp[[x*2-1]])))
+
+OverLapTabl=table(unlist(tSub), unlist(HLAtemp[seq(1, 12, by=2)]))
+## abba set
+
+HLAAbba=read.delim("data/Abba2015/Abba_polyslver_HLAs_v2.txt", sep="\t", stringsAsFactors = F)
+
+# create an overall overlap of the HLAs
+OverLap2=melt(OverLapTabl)
+
+OverLap2$Var2=substr(OverLap2$Var2, 5, 12)
+t1=melt(cbind(HLAAbba, Var1=rownames(HLAAbba)), measure.vars=c("A", "A.1", "B", "B.1", "C", "C.1"))
+colnames(t1)=c("Var1", "X", "Var2")
+
+tall=rbind(cbind(OverLap2[ -which(OverLap2$value==0),c("Var1", "Var2")], coh="rec"), cbind(t1[ ,c("Var1", "Var2")], coh="Abba"))
+summaryA=table(tall$Var2)
+
+barplot(summaryA, las=2, ylab="frequency")
+```
+
+Compare Polysolver with Optitype:
+The following barplots will summarize 4 things:
+
+* proportion of patients with exactly the same HLA types
+* proportion of patients with the same HLA alleles (e.g. A02:01 and A02:03 are considered consistent)
+* proportion of exactly the same HLA-types called (irrespective of patient)
+* proportion of the same HLA alleles called (irrespective of patient)
+
+```{r}
+
+InputOpti=read.delim("data/Abba2015/optitype_all_samples_collated", sep="\t", header=F)
+InputOpti=sapply(1:ncol(InputOpti), function(x) gsub("\\*", "", InputOpti[ ,x]))
+
+InputOpti2=sapply(1:6, function(x) substr(InputOpti[ ,x], 1, 3))
+HLAAbba2=sapply(1:6, function(x) substr(HLAAbba[ , x], 1, 3))
+
+midx=match(rownames(HLAAbba), InputOpti[ ,9])
+# number of cases with total matches
+AbbaConsistency=sapply(1:length(midx), function(x) sum(HLAAbba[x, ]%in%InputOpti[midx[x], 1:6]))
+# also substr
+AbbaConsistencyB=sapply(1:length(midx), function(x) sum(HLAAbba2[x, ]%in%InputOpti2[midx[x], ]))
+
+res1=length(which(AbbaConsistency==6))
+res2=length(which(AbbaConsistencyB==6))
+res3=length(which(AbbaConsistencyB>4))
+
+resA=sum(AbbaConsistency)
+resB=sum(AbbaConsistencyB)
+
+## Abba cohort
+barplot(c(c(res1, res2)/29, c(resA, resB)/(29*6)),  names.arg = c("pat_consist","HLA-fam consist", "HLA-cons", "HLA-type-same"), las=2, ylab="percentage concordant Abba", ylim=c(0,1))
+
+## DCIS cohort
+HLAtemp2=lapply(HLAtemp, function(x) substr(x, 5, 12))
+names(HLAtemp2)=paste(rep(c(1:3, 5, 8,9), each=2),  c("DCIS", "IDC"), sep="")
+HLAtemp3=lapply(HLAtemp, function(x) substr(x, 5, 7))
+midx=match(names(HLAtemp2), InputOpti[ ,9])
+
+RecConsistency=sapply(1:length(midx), function(x) sum(HLAtemp2[[x]]%in%InputOpti[midx[x], 1:6]))
+# also substr
+RecConsistencyB=sapply(1:length(midx), function(x) sum(HLAtemp3[[x]]%in%InputOpti2[midx[x], ]))
+
+res1=length(which(RecConsistency==6))
+res2=length(which(RecConsistencyB==6))
+resA=sum(RecConsistency)
+resB=sum(RecConsistencyB)
+
+barplot(c(c(res1, res2)/6, c(resA, resB)/(6*6)), names.arg = c("pat_consist","HLA-fam consist", "HLA-cons", "HLA-type-same"), las=2, ylab="percentage concordant Recurrence")
+
+
+```
+
+## Predicting neoantigens
+
+The NCBI protein fasta was used to query amino acid context. Amino acid sequences of out of frame deletions or insertions were determined with SIFT. 
+The code to perform this analysis is listed in extra functions
+
+```{r, eval=F}
+# code to evaluate protein coding sequence 
+library('biomaRt')
+library(dplyr)
+library(EnsDb.Hsapiens.v86)
+
+# upload the exported frameshifts.txt file to https://sift.bii.a-star.edu.sg/www/SIFT_indels2.html
+
+getSeqlistB=list()
+for (i in 1:length(Mutall2)){
+getSeqlistB[[i]]=AnnotateMutations(Mutall2[[i]], fname=names(Mutall2)[i])
+}
+names(getSeqlistB)=names(Mutall2)
+# Insert the annotation once the file is downloaded
+
+siftannot=dir(".", "*.tsv")
+a2=sapply(strsplit(siftannot, "_"), function(x) x[1])
+midx=match(names(Mutall2), a2)
+
+fileIn=paste("./", siftannot[midx], sep="")
+fileIn[grep("NA", fileIn)]=NA
+
+for (i in 1:length(fileIn)){
+getSeqlistB[[i]]=AppendFrameShifts(getSeqlistB[[i]], fileIn[i],names(Mutall2)[i])
+}
+# now use the output fasta file and the inferred HLA types in netHMCPan
+
+## consolidate the output into cvs files that can be easily read in:
+for (i in 1:12){
+  patID=names(Mutall2)[i]
+  dir1="../"
+  afile=dir(dir1, patID)
+  afile2=afile[grep("pan.txt", afile)]
+  bfile=afile[grep("mutation_list.txt", afile)]
+
+  NetHMCFile=read.delim(file.path(dir1, afile2), sep="\t",
+                      row.names=NULL, stringsAsFactors = F, header = T)
+  MutFile2=read.delim(file.path(dir1, bfile), sep="\t")
+  NetMHCCollate(NetHMCFile, MutFile2)
+}
+
+# Do the same for the Abba dataset
+
+getSeqlistAbba=list()
+for (i in 1:length(AMutall)){
+getSeqlistAbba[[i]]=AnnotateMutations(AMutall[[i]], fname=names(AMutall)[i])
+}
+names(getSeqlistAbba)=names(AMutall)
+
+siftannot=dir(".", "*.tsv")
+a2=sapply(strsplit(siftannot, "_"), function(x) x[1])
+midx=match(names(AMutall), a2)
+
+fileIn=paste("./", siftannot[midx], sep="")
+fileIn[grep("NA", fileIn)]=NA
+
+for (i in 1:length(fileIn)){
+getSeqlistAbba[[i]]=AppendFrameShifts(getSeqlistAbba[[i]], fileIn[i],names(AMutall)[i])
+}
+
+
+
+for (i in 1:length(AMutall)){
+  patID=names(AMutall)[i]
+  dir1="data/Abba2015/neoantigens/"
+  afile=dir(dir1, patID)
+  afile2=afile[grep("pan.txt", afile)]
+  bfile=afile[grep("mutation_list.txt", afile)]
+
+  NetHMCFile=read.delim(file.path(dir1, afile2), sep="\t",
+                      row.names=NULL, stringsAsFactors = F, header = T)
+  MutFile2=read.delim(file.path(dir1, bfile), sep="\t")
+  NetMHCCollate(NetHMCFile, MutFile2)
+}
+
+
+```
+
+Neoantigens based on mutated AA sequences were predicted using netHMC server, using a peptide size of 8-11. Strong binders were defined as having an affinity less than 0.5, and weak binders were defined as having a value less than 2. 
+
+A summary of the number of predicted neoantigens is shown below for the recurrence and the Abba cohorts
+
+```{r}
+## load in predicted neoantigens
+Npredpath="data/RecurrenceCohort/neo2/netmhc/"
+NPredictFiles=dir(Npredpath, "*.csv")
+
+NeoList=list()
+
+for (i in 1:length(NPredictFiles)){
+  xa=read.csv(sprintf("%s%s", Npredpath, NPredictFiles[i]), header=T)
+  lx2=paste(xa$Chromosome, xa$Start_position, sep="")
+  lx3=which(lx2%in%paste(Mutall2[[i]]$Chromosome, Mutall2[[i]]$Start_position, sep=""))
+  NeoList[[i]]=xa[lx3, ]
+}
+
+names(NeoList)=gsub("_", "", regmatches( NPredictFiles, regexpr("[0-9][A-Z]+_", NPredictFiles)))
+
+## Abba dataset here
+rsltfold="data/Abba2015/neoantigens/mhc/"
+infiles=dir(rsltfold, pattern = "*.csv")
+
+# need to change the inut nos so 1 goes before 10
+infiles2=sapply(strsplit(infiles, "_f"), function(x) x[1])
+mx1=order(infiles2)
+
+infiles=infiles[mx1]
+
+MHCAbba=list()
+for (i in 1:length(infiles)){
+MHCAbba[[i]]=read.csv(file.path(rsltfold, infiles[i]))
+MHCAbba[[i]]$pepLength=nchar(as.character(MHCAbba[[i]]$peptide))
+}
+
+names(MHCAbba)=names(AMutall)[match(infiles2, names(AMutall))]
+
+MHCAbbaDF=melt(MHCAbba, measure.vars="X")
+
+par(mfrow=c(1,2))
+
+HBind=sapply(NeoList, function(x) length(unique(x$cDNA_Change[which(x$Binder=="SB")])))
+WBind=sapply(NeoList, function(x) length(unique(x$cDNA_Change[which(x$Binder=="WB")])))
+TTab=rbind(WBind, HBind)
+
+HBind2=sapply(MHCAbba, function(x) length(unique(x$cDNA_Change[which(x$Binder=="SB")])))
+WBind2=sapply(MHCAbba, function(x) length(unique(x$cDNA_Change[which(x$Binder=="WB")])))
+TTab2=rbind(WBind2, HBind2)
+
+barplot(TTab, ylab="No predicted neoantigens", main="Recurrence set", las=2)
+legend("topleft", c("weak", "strong"), pch=19, col=c("grey15", "grey85") )
+barplot(TTab2, ylab="No predicted neoantigens", main="Abba Set", las=2)
+legend("topright", c("weak", "strong"), pch=19, col=c("grey15", "grey85") )
+```
+
+We run the below commented out code inorder to create bed files for analysis later on
+
+```{r, eval=F}
+## comment out to run
+## save a list of bed files 
+for (i in 1:length(MHCAbba)){
+  temp1=MHCAbba[[i]][ ,c( "Chrom", "Position.2")]
+  temp1$Start=temp1$Position.2-1
+  temp1$Chrom=substr(temp1$Chrom, 4, 5)
+  temp1=temp1[ ,c(1, 3, 2)]
+  temp1=temp1[-which(duplicated(temp1)), ]
+  write.table(temp1, file=paste(names(MHCAbba)[i], "neoantLoc.bed", sep=""), quote=F, sep="\t", row.names=F, col.names = F)
+}
+
+```
+
+## Expressed neoantigens
+
+To determine whether neoantigens were "expressed", mutations determined from exome data was extracted and saved in a .bed file and the corresponding RNA-seq data was used to determine the allelic fraction at each mutation site (using samtools mpileup). Mutation sites with at two alternate reads were considered as "expressed". 
+
+Reads were also modelled using a negative-binomial distribution to determine required allelic depth at each site in order to see at least 2 alt reads with 95\% probability (the exome VAF was used to determine the probability of seeing an alternate read)
+
+```{r}
+## load in neoantigen expression values: RECURRENCE
+
+NpredExpr="data/RecurrenceCohort/neo2/expressed_neoantigens/"
+NPredictFiles=dir(NpredExpr, "*.vcf")
+
+NamNpred=sapply(strsplit( NPredictFiles, ".Aligned"), function(x) x[1])
+NeoListExpr=list()
+Nskip=108
+
+for (i in 1:length(NPredictFiles)){
+  Anew=read.table(sprintf("%s%s", NpredExpr, NPredictFiles[i]), header=F, skip=Nskip)
+  lx2=paste(Anew$V1, Anew$V2, sep="")
+  lx3=which(lx2%in%paste(Mutall2[[NamNpred[i]]]$Chromosome, Mutall2[[NamNpred[i]]]$Start_position, sep=""))
+  Anew=Anew[lx3, ]
+  MX1=strsplit(as.character(Anew$V10), ":")
+  MX2=sapply(MX1, function(x) x[3])
+  MX3=strsplit(MX2, ",")
+  Ref=sapply(MX3, function(x) x[1])
+  Alt=sapply(MX3, function(x) sum(as.numeric(x[2:length(x)])))
+  NeoListExpr[[i]]=data.frame(chr=Anew$V1, Start.bp=Anew$V2, RefBase=Anew$V4, AltBase=Anew$V5, Ref=as.numeric(as.character(Ref)), Alt=Alt)
+}
+
+names(NeoListExpr)=gsub("_", "", regmatches( NPredictFiles, regexpr("[0-9][A-Z]+", NPredictFiles)))
+
+## load in neoantigen expression values: Abba set
+
+NpredExprAbba="data/Abba2015/neoantigens/expressed/"
+NPredictFilesAbba=dir(NpredExprAbba, "*.vcf")
+
+NeoListExprAbba=list()
+Nskip=108
+for (i in 1:length(NPredictFilesAbba)){
+  Anew=read.table(sprintf("%s%s", NpredExprAbba, NPredictFilesAbba[i]), header=F)
+  MX1=strsplit(as.character(Anew$V10), ":")
+  MX2=sapply(MX1, function(x) x[3])
+  MX3=strsplit(MX2, ",")
+  Ref=sapply(MX3, function(x) x[1])
+  Alt=sapply(MX3, function(x) sum(as.numeric(x[2:length(x)])))
+  NeoListExprAbba[[i]]=data.frame(chr=Anew$V1, Start.bp=Anew$V2, RefBase=Anew$V4, AltBase=Anew$V5, Ref=as.numeric(as.character(Ref)), Alt=Alt)
+}
+
+names(NeoListExprAbba)=AbbaClin$SampleID[match(regmatches(NPredictFilesAbba, regexpr("SRR[0-9]+", NPredictFilesAbba)), AbbaClin$run_accession)]
+```
+
+## RNA seq 
+
+### Checking read depth and coverage
+
+RNA was aligned using STAR and compressed to counts. 
+Below is a summary of the RNA quality: Sparsity of the matrix (number genes with zero reads for each sample) and read depth (No of reads which are uniquely aligned). 
+
+```{r}
+pathFiles="data/RecurrenceCohort/expression/raw_counts/"
+temp1=dir(pathFiles)
+
+A1=read.delim(sprintf("%s%s", pathFiles, temp1[1]), header=F, row.names = 1)[ ,1]
+
+for (i in 2:length(temp1)){
+  A2=read.delim(sprintf("%s%s", pathFiles, temp1[i]), header=F, row.names = 1)
+  A1=cbind(A1, A2[ ,1])
+}
+
+rownames(A1)=rownames(A2)
+colnames(A1)=substr(temp1, 9, 17)
+colnames(A1)=gsub("_v1_[R]*","", colnames(A1))
+colnames(A1)=gsub("_","", colnames(A1))
+colnames(A1)=gsub("o","", colnames(A1))
+
+countsTable=A1[-c(1:4), ]
+
+infoTable <- read.table('data/RecurrenceCohort/expression/sample-info.tsv', header=TRUE, sep='\t', check.names = FALSE, comment.char = '')
+midx=match(infoTable$sample, colnames(countsTable))
+infoTable=infoTable[order(midx), ]
+
+# remove genes which dont have at least 10 reads across all samples
+countsTable2 <- countsTable[rowSums(countsTable[ ,-1]) > 10,]
+#RN2=sapply(strsplit(rownames(countsTable2), "\\.[0-9]+"), function(x) x[1])
+
+# load file with the name conversions
+RNames2=read.csv("annotations/gene_name_ensb_hugo.csv")
+# also attach gene length where appropriate
+
+mmatch=RNames2$hugo[match(rownames(countsTable2), RNames2$names)]
+
+xdup=unique(mmatch[which(duplicated(mmatch))])
+DupTable=t(sapply(xdup, function(x) colSums(countsTable2[which(mmatch==x), ])))
+rownames(DupTable)=xdup
+
+countsTableAll=countsTable2[-which(mmatch%in%xdup), ]
+cNames=mmatch[-which(mmatch%in%xdup)]
+
+rownames(countsTableAll)=cNames
+countsTableAll=rbind(countsTableAll, DupTable)
+
+countsTableAll=countsTableAll[which(rowSums(countsTableAll)>10), ]
+CSums2=colSums(countsTableAll)
+## remove cases with counts less than 3000000
+countsTableAllF=countsTableAll[ , -(which(CSums2<3000000))]
+infoTable2=infoTable[-which(CSums2<3000000), ]
+infoTable2$case=factor(infoTable2$case)
+rownames(infoTable2)=infoTable2$sample
+```
+
+TPM data was inferred using RSEM. This was used as input for deconvolution algorithms, e.g. CIBERSORT and ssGSEA
+
+
+```{r}
+## Load TPM values: can't do differential gene expression analyis using DESEQ as there are no replicates and case 8 and cas 9 are too different
+## NOTE
+CPtabTPMTum=read.delim("data/RecurrenceCohort/expression/Wu_DCIS_Tcap_11samples_11252017.rsem_genes_tpm.txt")
+CPtabTPMStr=read.delim("data/RecurrenceCohort/expression/Wu_DCIS_Tcap_4samples_12012017.rsem_genes_tpm.txt")
+#infoTable <- read.table('../expression/sample-info.tsv', header=TRUE, sep='\t', check.names = FALSE, comment.char = '')
+lx1=match(CPtabTPMTum$gene_id, CPtabTPMStr$gene_id)
+
+colnames(CPtabTPMStr)[-c(1:2)]=paste("S", substr(colnames(CPtabTPMStr)[-c(1:2)], 9, 13), sep="")
+colnames(CPtabTPMStr)=gsub("_", "", colnames(CPtabTPMStr))
+
+colnames(CPtabTPMTum)[-c(1:2)]=substr(colnames(CPtabTPMTum)[-c(1:2)], 9, 13)
+colnames(CPtabTPMTum)=gsub("_", "", colnames(CPtabTPMTum))
+
+TPMtable=cbind(CPtabTPMTum, CPtabTPMStr[ ,-c(1:2)])
+
+mIDX=RNames2$hugo[match(TPMtable$geneid, RNames2$names)]
+dupnames=unique(mIDX[which(duplicated(mIDX))])
+
+DupTable=t(sapply(dupnames, function(x) colSums(TPMtable[which(mIDX==x), -c(1:2)])))
+rownames(DupTable)=dupnames
+x2=which(mIDX%in%dupnames)
+TPMtable=TPMtable[-which(mIDX%in%dupnames), ]
+cNames=mIDX[-which(mIDX%in%dupnames)]
+
+rownames(TPMtable)=cNames
+TPMtable=rbind(TPMtable[ ,-c(1:2)], DupTable)
+#colnames(TPMtable)[12:15]=paste("S", substr)
+
+rsums=rowSums(TPMtable)
+rmidx=which(rsums==0)
+
+TPMtable2=TPMtable[-rmidx, ]
+
+# do a summary of number of genes which are 0 in each column
+
+Nzero=sapply(1:ncol(TPMtable2), function(x) length(which(TPMtable2[ ,x]>0)))
+
+par(mfrow=c(1,2))
+barplot(Nzero, names=colnames(TPMtable2), las=2, ylab="no genes with Reads", main="sparsity of gene matrix")
+barplot(CSums2, names=names(CSums2), las=2, ylab="Number of reads", main="read depth")
+
+TPMtable2=TPMtable2[ ,-which(Nzero<15000)]
+
+write.csv(TPMtable2, file="TPM_recurrence_reduced_set.csv")
+```
+
+As a consequence, the following samples were retained for gene expression analysis due to higher quality: (at least 3M counts per sample and 15K genes detected)
+
+* 8 IDC \& 8 DCIS
+* 9 IDC \& 9 DCIS
+* 2 IDC
+* 3 IDC
+* all stromal samples (indicated with S before name)
+
+Here, library sizes were normalised and vsd transformed using DeSeq. Note the design is in the form of:
+
+Count ~ type + case
+ 
+```{r, cache=T}
+ddsR <- DESeqDataSetFromMatrix(countData = data.matrix(countsTableAllF), colData = infoTable2, design = ~ type+case)
+ddsR <- estimateSizeFactors(ddsR)
+vsdR <- varianceStabilizingTransformation(ddsR)
+normalizedTableVSD <- assay(vsdR)
+#normalizedTableVSD <- normalizedTableVSD[,sort(colnames(normalizedTableVSD))]
+normalizedCountsTable <- as.data.frame(counts(ddsR, normalized = TRUE))
+```
+
+```{r, eval=T}
+y <- DGEList(counts=countsTableAllF, samples=infoTable2)
+#y <- y[-which(rowSums(cpm(y))<=1.5), ]
+y<-calcNormFactors(y)
+y=estimateCommonDisp(y, design=model.matrix(~infoTable2$type))
+allfit=glmFit(y, design=model.matrix(~y$samples$type))
+
+GeneWidths2=tx37$gene_legth[match(rownames(y$counts), tx37$HUGO)]
+CPMtab=cpm(y)
+RPKMtab=rpkm(y, gene.length = GeneWidths2)
+
+TPMtab <- do.call(cbind, lapply(1:ncol(countsTableAllF), function(i) {
+rate = log(countsTableAllF[,i]) - log( GeneWidths2[i])
+denom = log(sum(exp(rate)))
+exp(rate - denom + log(1e6))
+}))
+
+colnames(TPMtab)=colnames(countsTableAllF)
+```
+
+### Abba cohort RNA samples
+
+The Abba cohort in general had good quality RNA data: Samples had a library size of at least 15M reads, and around 30K genes annotated from the ensembl data set had reads:
+
+```{r}
+## TPM data
+TPMAbba=read.delim("data/Abba2015/Abba_TPM.txt", row.names = 1)
+
+## Raw counts
+abbapath="data/Abba2015/AbbaReadCounts/"
+afiles=dir(abbapath)
+
+AbbaCounts=matrix(NA, nrow=57905, ncol=length(afiles))
+
+for (i in 1:length(afiles)){
+  X1=read.delim(file.path(abbapath, afiles[i]), sep="\t")
+  AbbaCounts[ ,i]=X1[ -c(1:3),2]
+}
+rownames(AbbaCounts)=X1[-c(1:3) ,1]
+
+cNames1=substr(afiles, 1, 10)
+colnames(AbbaCounts)=AbbaClin$SampleID[match(cNames1, AbbaClin$run_accession)]
+lx1=RNames2$hugo[match(rownames(AbbaCounts), RNames2$ensb)]
+
+rmsamp=unique(lx1[which(duplicated(lx1))])
+## convert this to UCSC?
+
+DupVals=sapply(rmsamp, function(x) colSums(AbbaCounts[which(lx1==x), ]))
+colnames(DupVals)=rmsamp
+
+AbbaCounts2=AbbaCounts[-which(lx1%in%rmsamp), ]
+rownames(AbbaCounts2)=lx1[-which(lx1%in%rmsamp)]
+
+AbbaCounts=rbind(AbbaCounts2, t(DupVals))
+
+# remove rows which have lesss than Ncol counts
+
+Nzero=sapply(1:ncol(AbbaCounts), function(x) length(which(AbbaCounts[ ,x]>0)))
+CSums2=colSums(AbbaCounts)
+
+par(mfrow=c(1,2))
+barplot(Nzero, names=colnames(AbbaCounts), las=2, ylab="no genes with reads", main="sparsity of gene matrix")
+barplot(CSums2, names=names(CSums2), las=2, ylab="Number of reads", main="read depth")
+
+AbbaCounts=AbbaCounts[which(rowSums(AbbaCounts)>ncol(AbbaCounts)), ]
+```
+
+
+```{r, cache=T}
+# abbaset
+aInfo=AbbaClin[ which(AbbaClin$RNAseq=="PQC"),]
+rownames(aInfo)=aInfo$SampleID
+dds <- DESeqDataSetFromMatrix(countData = data.matrix(AbbaCounts), colData = aInfo, design = ~ Description)
+ddsAbba <- DESeq(dds)
+vsdAbba <- varianceStabilizingTransformation(ddsAbba)
+VSDAbba <- assay(vsdAbba)
+AbbaNormCountsTable <- as.data.frame(counts(ddsAbba, normalized = TRUE))
+rpkmAbba=rpkm(AbbaNormCountsTable, gene.length = tx37$gene_legth[match(rownames(AbbaNormCountsTable), tx37$HUGO)])
+```
+
+
+## T and B cell clonality
+
+Distinct T and B cell repertoires were inferred from RNAseq data using MIXCR. From this list, remove all peptides of less than 6 amino acids as this cannot be uniquely identified.  
+
+```{r, eval=F, echo=T}
+# run mixcr separately on rnaseq and exome seq data
+# note that we only have bam files for exome, need to convert these to fastq so they are compatible for mixcr
+# unsure if we get different results if separate into single end vs paired end samples (there is a flag notice about paired mates not existing next to sample)
+
+    mixcr align -p rna-seq -OallowPartialAlignments=true $m1 $m2 $m3
+    mixcr assemblePartial $m3 $m3p1
+    mixcr assemblePartial $m3p1 $m3p2
+    mixcr extendAlignments  $m3p2 $m3ext
+    mixcr assemble $m3ext $m4
+    mixcr exportClones $m4 $m5
+```
+
+
+These peptide T/BCR sequences was compared with that listed IEDB dataset to determine what kind of peptides were recognised. 
+
+
+```{r}
+FileDir=("data/RecurrenceCohort/mixcr/")
+FileNam=dir(FileDir)
+
+#NreadsPerSamp=read.csv("data/RecurrenceCohort//readcountsummary.csv", header=F) # does this exist?
+
+TCRbase=read.csv("annotations//tcell_receptor_table_export_1534262165.csv", header=T)
+BCRbase=read.csv("annotations//bcell_receptor_table_export_1534262204.csv", header=T)
+
+mx=grep("mixcrclones.txt", FileNam)
+
+BCRlight=lapply(mx, function(x) read.delim(file.path(FileDir, FileNam[x]), header=T, sep="\t", stringsAsFactors=F))
+names(BCRlight)=sapply(strsplit(FileNam[mx], "_"), function(x) paste(x[2], x[3]))
+
+NamBCR2=sapply(strsplit(FileNam[mx], "_"), function(x) x[2])
+
+BFreq=lapply(BCRlight, function(x) x[grep("IG", x$allVHitsWithScore), c("cloneCount", "aaSeqCDR3")])
+TFreq=lapply(BCRlight, function(x) x[grep("TR", x$allVHitsWithScore), c("cloneCount", "aaSeqCDR3")])
+
+RmDup=function(x, addCol=1, idCol=2){
+  mx1=which(duplicated(x[ ,idCol])==T)
+if (length(mx1)>0){
+  mx2=unique(x[mx1, idCol])
+  x2=sapply(mx2, function(y) sum(x[x[ ,idCol]==y, addCol]))
+  x3=x[-which(x[ ,idCol]%in%mx2), ]
+  mm=stack(x2)
+  colnames(mm)=colnames(x3)
+  x=rbind(x3, mm)
+}
+ temp1=x[ ,idCol]	 
+ temp1=gsub( "_", "", temp1)		
+ temp1=gsub( "\\*", "", temp1)		
+ x2=which(nchar(temp1)<6)
+  if (length(x2)>0){
+  x=x[-x2, ]  
+  }
+ 
+rmidx2=which(x[ ,1]<2)
+
+if (length(rmidx2)>0){
+x=x[-rmidx2, ]
+}
+x
+  
+}
+
+BNew=lapply(BFreq, function(x) RmDup(x))
+TNew=lapply(TFreq, function(x) RmDup(x))
+
+
+TestPlot=rbind(sapply(BNew, nrow), sapply(TNew, nrow))
+
+barplot(TestPlot+1, beside=T, las=2, ylab="# RNA clones with at least 2 counts", col=c("red", "blue"), main="remove duplicates and 6AA uniq", log="y")
+legend("topleft", c("B", "T"), col=c("red", "blue"), pch=19)
+```
+
+## Phylogentic reconstructions
+
+Phylogenetic reconstruction was performed using phylowgs using mutations obtained from mutect2 and called CNVs. Samtools mpileup was used to extract the alternate read count at each site, and this was parsed to run in phylowgs.
+Solutions were ranked according to increasing -log likelihood and in the case where multiple solutions had the same score, the solution with the smallest number of nodes was used. Below is the code used to extract mutations into input files.
+
+```{r, eval=F}
+# extract all the mutation locations for phylowgs: for each case, create a list of genomic locations in both the DCIS and the IDC
+
+for (i in seq(1, 11, by=2)){
+  GatherAllMut(Mutall2[[i]], Mutall2[[i+1]], bedName=paste("Case", substr(names(Mutall2)[[i]], 1, 1), sep=""))
+}
+
+# from the vcfs extract the locations of overlapping mutations into vcf files:
+
+pathIn1="DCIS-IDCpairs/data/RecurrenceCohort/4phylowgs/2DCISCase2silent.bed.vcf"
+pathIn2="DCIS-IDCpairs/data/RecurrenceCohort/4phylowgs/2IDCCase2silent.bed.vcf"
+MutallA=NULL
+MutallB=NULL 
+outname1="2DCISsilent"
+outname2="2IDCsilent"
+
+FindNonZeroOverlaps(pathIn1, pathIn2, outname1, outname2, MutallA, MutallB)
+```
+
+
+```{r, eval=T}
+## Run this for run 4: these are the phylogenies based on silent mutations
+pattLocs="data/RecurrenceCohort/phylowgs/summary_outputs_phylowgs_nov.xlsx"
+
+CCFs=lapply(1:6, function(x) read_xlsx(pattLocs,sheet=(x+1)))
+names(CCFs)=c(paste("Case", PatNames, sep=""))
+
+
+## do i actually need this file? YES!!
+MutDetailFiles="keyMutations.txt"
+pathLocs="data/RecurrenceCohort/phylowgs/"
+
+basename.matches <- list.files(path=pathLocs,pattern=MutDetailFiles, recursive=T,
+                               full.names = TRUE)
+
+ClonalMuts=lapply(basename.matches, function(x) read.delim(x, sep="\t"))
+names(ClonalMuts)=c(paste("Case", PatNames, sep="")) #, paste("Case", PatNames, sep=""))
+
+```
+
+## TCGA datasets
+
+In this study, we used the following information from the TCGA:
+
+- CNV data
+- mutation data
+- Immune signatures (inferred by Thorsson et al)
+- HLA and neoantigen prediction (Thorsson et al)
+- Clinical information
+
+TCGA CN and mutation profiles were obtained from [firebrowse](http://firebrowse.org/). Immune Signatures and neoantigen prediction from [Thorrson et al](https://www.cell.com/immunity/comments/S1074-7613(18)30121-3#secsectitle0435)
+
+
+```{r}
+# mutation data
+load("data/TCGA/Summary_TCGA_mutations_w_vaf_v2.4.RData")
+# CNV data
+TCGACNA=read.delim("data/TCGA/BRCA.snp__genome_wide_snp_6__broad_mit_edu__Level_3__segmented_scna_minus_germline_cnv_hg19__seg.seg.txt")
+TCGACNA$Chromosome[which(TCGACNA$Chromosome=="23")]="X"
+TCGATab=GRanges(seqnames=TCGACNA$Chromosome, 
+                 ranges=IRanges(start=TCGACNA$Start,end=TCGACNA$End), Pat=TCGACNA$Sample, CN=TCGACNA$Segment_Mean,
+                call=ifelse(TCGACNA$Segment_Mean<0.3, -1, ifelse(TCGACNA$Segment_Mean>0.3, 1, 0)))
+# neoantigen prediction (protected)
+npath="data/TCGA/thorsson/TCGA_neoantigens_controlled/"
+allTCGANeoList=dir(npath, "*_v2.txt")
+namList=strsplit(allTCGANeoList, "_")
+namList=sapply(namList, function(x) x[4])
+allTCGANeoList=lapply(allTCGANeoList, function(x) read.delim(paste(npath, x, sep="/"), sep="\t"))
+names(allTCGANeoList)=namList
+chrIdx=c(14, 16, 10,7, 5, 19,16, 3, 10, 17, 2)
+ 
+allTCGANeoList2=lapply(1:length(allTCGANeoList), function(x) allTCGANeoList[[x]][which(allTCGANeoList[[x]]$chromosome==chrIdx[x]), ])
+names(allTCGANeoList2)=namList
+
+# also compute extra signatures for the TCGA cohort?
+load("~/Documents/public_data/TCGA/TCGA_rnaseq_counts_w_NormMet.RData")
+# For each sample, compute 
+TIMER_TCGA=read.csv("data/TCGA/infiltration_estimation_for_tcga.csv")
+TIMER_TCGA=TIMER_TCGA[which(substr(TIMER_TCGA$cell_type, 1, 12)%in%ThorssonTab$`TCGA Participant Barcode`), ]
+TIMER_TCGA$Patient.ID=substr(TIMER_TCGA$cell_type, 1, 12)
+x1=match(TIMER_TCGA$Patient.ID, ThorssonTab$`TCGA Participant Barcode`)
+TIMER_TCGA$PAM50=ThorssonTab$`TCGA Subtype`[x1]
+
+la1=TIMER_TCGA[,c(grep("CIB", colnames(TIMER_TCGA)), 121:122) ]
+testOut=melt(la1)
+
+#ggplot(testOut, aes(x=PAM50, y=value))+geom_boxplot()+facet_wrap(~variable)
+```
+
+Is there an association between stage and the different signatures, or PAM50 subtype?
+
+```{r}
+# do a quick check if immune signatures associate with stage, PAM50
+
+BrClin$Stage=substr(BrClin$American.Joint.Committee.on.Cancer.Tumor.Stage.Code, 1, 2)
+ThorssonTab$Stage=BrClin$Stage[match(ThorssonTab$`TCGA Participant Barcode`, BrClin$Patient.ID)]
+ThorssonTab$PAM50=BrClin$PAM50[match(ThorssonTab$`TCGA Participant Barcode`, BrClin$Patient.ID)]
+
+par(mfrow=c(2,3))
+
+boxplot(as.numeric(ThorssonTab$`Wound Healing`)~ThorssonTab$Stage)
+boxplot(as.numeric(ThorssonTab$`TGF-beta Response`)~ThorssonTab$Stage)
+boxplot(as.numeric(ThorssonTab$`Lymphocyte Infiltration Signature Score`)~ThorssonTab$Stage)
+boxplot(as.numeric(ThorssonTab$`IFN-gamma Response`)~ThorssonTab$Stage)
+boxplot(as.numeric(ThorssonTab$`Macrophage Regulation`)~ThorssonTab$Stage)
+boxplot(as.numeric(ThorssonTab$`TIL Regional Fraction`)~ThorssonTab$Stage)
+```
+
+
+```{r child = 'chapter_GEnew_final.Rmd', eval=T, cache=T}
+```
+
+
+```{r child = 'chapter_cna.Rmd', eval=T, cache=T}
+```
+
+
+```{r child = 'chapter_mutation.Rmd', eval=T, cache=T}
+```
+
+```{r child = 'ch_gsea_mut_cna.Rmd', eval=T,cache=T}
+```
+
+
+```{r child = 'chapter_inferGenomicRegions.Rmd', eval=T, cache=T}
+```
+
+
+
+```{r child = 'chapter_neoantigen_final.Rmd', eval=T, cache=T}
+```
+
+```{r child = 'checkRSsnp.Rmd', eval=T, cache=T}
+```
+
+
+```{r child = 'chapter_phylogeny.Rmd', eval=T, cache=T}
+```
+
+
+```{r child='chapter_TCR_BCR_mixcr.Rmd', eval=T, cache=T}
+
+```
+
+
+```{r child='chapter_qupath_final.Rmd', eval=T, cache=T}
+
+```
+
+
+
+```{r, child='case9_template_cycif_finalfinal.Rmd', eval=T, cache=T}
+
+```
+
+
+```{r, child='case8_cycif_final.Rmd', eval=T, cache=T}
+
+```

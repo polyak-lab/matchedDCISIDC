@@ -11,7 +11,6 @@ mSearch=c("AKT1","CDH1",  "GATA3", "KMT2C", "MAP3K1" ,"MUC16" , "PALB2", "PIK3CA
 lx1=which(B1$Hugo_Symbol%in%mSearch)
 B2=B1[lx1, ]
 
-
 ```
 
 
@@ -91,6 +90,96 @@ Note that TP53 and PIK3CA mutations below seem to be occurring at hostpots: whil
 plot(AllGMat[ ,10], AllGMat[ ,4], xlab="Patient frequency", ylab="No unique sites")
 text(AllGMat[ ,10], AllGMat[ ,4], rownames(AllGMat))
 ```
+
+## HLA neoantigen frequency
+
+Summary of the HLA frequencies in the TCGA breast patients
+
+```{r}
+AllHLAs=read.delim("data/DontUpload/OptiTypeCallsHLA_20171207.tsv", sep=",")
+AllHLAs$sub=substr(AllHLAs$aliquot_id, 1, 12)
+
+midx=which(AllHLAs$sub%in%as.character(BrClin$Patient.ID))
+AllHLAs=AllHLAs[midx, ]
+
+Atable=table(unlist(AllHLAs[ ,1:2]))
+Btable=table(unlist(AllHLAs[ ,3:4]))
+Ctable=table(unlist(AllHLAs[ ,5:6]))
+
+par(mfrow=c(3,1))
+
+barplot(sort(Atable[which(Atable>5)]), las=2, ylab="frequency A allele")
+mtext("TCGA common HLAs", 3)
+barplot(sort(Btable[which(Btable>5)]), las=2, ylab="frequency B allele")
+barplot(sort(Ctable[which(Ctable>5)]), las=2, ylab="frequency C allele")
+
+
+```
+
+```{r}
+HLAlistTCGA=lapply(allTCGANeoList2, function(x) unique(x[ ,c("barcode", "hla", "position")]))
+
+# number of times a particular HLA appears
+UnHLAlist=lapply(HLAlistTCGA, function(x) table(x$hla))
+
+# get the HLA-Avalues first
+
+HSummA=lapply(UnHLAlist, function(x) x[grep("HLA-A", names(x))])
+HSummB=lapply(UnHLAlist, function(x) x[grep("HLA-B", names(x))])
+HSummC=lapply(UnHLAlist, function(x) x[grep("HLA-C", names(x))])
+
+par(mfrow=c(2,2))
+
+for (i in c( 6, 8, 10:11)){
+  barplot(sort(HSummA[[i]][which(HSummA[[i]]>5)]), las=2, main=names(HSummA)[i], ylab="HLA-A frequency")
+}
+
+for (i in c( 6, 8, 10:11)){
+  barplot(sort(HSummB[[i]][which(HSummB[[i]]>5)]), las=2, main=names(HSummB)[i], ylab="HLA-B frequency")
+}
+
+for (i in c( 6, 8, 10:11)){
+  barplot(sort(HSummC[[i]][which(HSummC[[i]]>5)]), las=2, main=names(HSummC)[i], ylab="HLA-C frequency")
+}
+
+## For PIK3CA and TP53, check how frequently the mutations appear
+
+TabPosHLA=lapply(HLAlistTCGA, function(x) table(x$position, x$hla))
+
+PIK3CAtab=TabPosHLA[[8]]
+coMatch=B2$Protein_Change[match(rownames(PIK3CAtab), B2$Start_position)]
+rownames(PIK3CAtab)=coMatch
+midx=rowSums(PIK3CAtab)
+PIK3CAtab=PIK3CAtab[order(midx, decreasing = T), ]
+
+
+TP53tab=TabPosHLA[[10]]
+coMatch=B2$Protein_Change[match(rownames(TP53tab), B2$Start_position)]
+rownames(TP53tab)=coMatch
+midx=rowSums(TP53tab)
+TP53tab=TP53tab[order(midx, decreasing = T), ]
+
+rmIdx=which(colSums(PIK3CAtab)>50)
+rmIDx2=which(rowSums(PIK3CAtab)>50)
+
+HLAgrep=c("HLA-B*44:02", "HLA-A*11:01", "HLA-B*40:01", "HLA-C*07:02", "HLA-A*11:01", "HLA-A*33:03", "HLA-C*07:06", "HLA-B*58:01")
+
+al1=match(HLAgrep, colnames(PIK3CAtab))
+
+heatmap.2(PIK3CAtab[ rmIDx2,na.omit(unique(c(rmIdx, al1)))], col=brewer.pal(9, "Blues"), scale="none", trace="none")
+
+rmIdx=which(colSums(TP53tab)>100)
+rmIDx2=which(rowSums(TP53tab)>100)
+
+HLAgrep=c("HLA-A*02:01", "HLA-A*31:01", "HLA-B*40:01", "HLA-A*33:03", "HLA-C*07:06", "HLA-C*03:03", "HLA-C*07:06", "HLA-A*68:01", "HLA-C*04:01")
+
+al1=match(HLAgrep, colnames(TP53tab))
+type2=c("p.G266R", "p.R273H", "p.P151T", "p.C176F", "p.R248W")
+a12=match(type2, rownames(TP53tab))
+heatmap.2(TP53tab[ na.omit(unique(c(rmIDx2, a12))),na.omit(unique(c(rmIdx, al1)))], col=brewer.pal(9, "Blues"), scale="none", trace="none")
+
+```
+
 
 ## Association with immune signatures
 
@@ -259,7 +348,49 @@ heatmap.2(Map2, Rowv = NA, Colv = NA, col=RdBu[11:1], trace="none", symbreaks = 
 
 
 OutputMap=cbind(AllGMat, t(Map2))
+```
 
+For each case create a linear model that takes into account subtype, stage, and whether the mutation contributes to each signature
+
+```{r}
+
+DNames=c("Macrophage Regulation","Lymphocyte Infiltration Signature Score","IFN-gamma Response",
+         "Wound Healing", "TGF-beta Response", "CTL", "Activated", "Inhibitory", "Exhausted", "Naive")
+
+RNameCoef=c("PIK3CAn", "TP53n", "CDH1n","GATA3n","MUC16n","MAP3K1n","KMT2Cn","PALB2n","PTENn","TTNn")
+
+GLMouput=lapply(DNames, function(x) summary(glm(as.numeric(pull(ThorssonTab2, x))~Stage+AKT1n+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+                  MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)))
+
+GLMmat=sapply(GLMouput, function(x) ifelse(coefficients(x)[ ,4]<0.1, coefficients(x)[ ,1], 0))
+
+T2=GLMmat[-c(1:6),  ]
+colnames(T2)=DNames
+
+T2[which(T2>0.6, arr.ind = T)]=0.6
+
+heatmap.2(T2[sort(rownames(T2)), ], col=RdBu[11:1], trace="none", scale="none", Rowv = NA)
+
+
+# ))
+# 
+# LIsignature=glm(as.numeric(pull(ThorssonTab2, DNames[1]))~Stage+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+#                   MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)
+# 
+# mac_reg=glm(as.numeric(`Macrophage Regulation`)~Stage+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+#                   MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)
+# 
+# ifnRes=glm(as.numeric(`IFN-gamma Response`)~Stage+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+#                   MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)
+# 
+# whresponse=glm(as.numeric(`Wound Healing`)~Stage+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+#                   MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)
+# 
+# tgfresponse=glm(as.numeric(`TGF-beta Response`)~Stage+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+#                   MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)
+# 
+# CD8response=glm(as.numeric(`TIL Regional Fraction`)~Stage+PIK3CAn+TP53n+CDH1n+GATA3n+MUC16n+
+#                 MAP3K1n+KMT2Cn+PALB2n+PTENn+TTNn,data=ThorssonTab2)
 ```
 
 ## DCIS set
@@ -309,9 +440,58 @@ ggplot(amelt, aes(x=Var1, y=value, fill=Var2))+geom_bar(stat="identity", positio
 
 ```
 
-write to file as Table S5
+Perform Proportion test to see if the frequency is different in DCIS and IDC
 
 ```{r}
 OutputMap=cbind(OutputMap, AbbaSumMat)
+OutputMap
+AbbaSumMat
+
+Ptest=sapply(1:nrow(OutputMap), function(x) prop.test( c(AbbaSumMat[x, 2], OutputMap[x, 11]), c(35, 977))$p.value)
+names(Ptest)=rownames(OutputMap)
+Ptest
+```
+
+write to file as Table S5
+
+```{r}
+
 write.csv(OutputMap, file="rslt/TableS5_DCIS_mutation_frequency.csv")
+```
+
+Test differences in gene expression or signatures between mutated vs not:
+
+```{r}
+FinMat=AbbaNeoMutSum[na.omit(match(mSearch, rownames(AbbaNeoMutSum))), ]
+
+idxV2=match(colnames(FinMat), colnames(Imm2))
+
+DCIStestMat=matrix(NA, ncol=nrow(FinMat), nrow=nrow(Imm2))
+
+for (i in 1:nrow(FinMat)){
+  for (j in 1:nrow(Imm2)){
+    DCIStestMat[j, i]=tryCatch({t.test(Imm2[j , na.omit(idxV2)]~ifelse(FinMat[i, -which(is.na(idxV2))]>0, 1, 0))$p.value}, error=function(e) {NA})
+  }
+}
+
+rownames(DCIStestMat)=rownames(Imm2)
+colnames(DCIStestMat)=rownames(FinMat)
+```
+
+Also try a regression model
+
+```{r}
+FinMat2=FinMat
+FinMat2[which(FinMat2<3, arr.ind = T)]=0
+FinMat2=sign(FinMat2[ ,-which(is.na(idxV2))])
+
+MatB=Imm2[ , na.omit(idxV2)]
+
+df.B=cbind(t(FinMat2), t(MatB))
+df.B=data.frame(df.B)
+
+DNames=colnames(df.B)[7:19]
+
+GLMouput=lapply(DNames, function(x) summary(glm(as.numeric(pull(df.B, x))~factor(GATA3)+factor(PIK3CA)+factor(TP53)+factor(KMT2C)+factor(MUC16)+factor(TTN),data=df.B)))
+
 ```

@@ -13,8 +13,10 @@ luminalMarkers=c(4:7, 9, 12:14, 16:20,22, 25, 29,32:33, 36)
 
 immlabels=c("bcell", "CD4", "cd8", "Tregs","macrophage", "pd1+")
 stromaLabels=c("endothelial", "stroma", "vim+", "a-sma+")
-lumLab2=c("CK+Ecad+" ,  "CK8 lo"  ,   "CKlow"    ,  "col-hi"   ,  "ER"   ,      "Ki67+"  ,    "myeop" ,     "vim/sma", "basalLike")
+lumLab2=c("CK+Ecad+" ,  "CK8 lo"  ,   "CKlow"    ,  "col-hi"   ,  "ER"   ,      "Ki67+"  ,    "myeop" ,     "basalLike")
 
+
+case8_cellids$final2[which(case8_cellids$final2=="vim/sma")]="basalLike"
 ```
 
 ### Overview of the image
@@ -94,7 +96,7 @@ par(mfrow=c(2,2))
 
 lx1=table(case8_cellids$final2, case8_cellids$type)
 
- lxLum=lx1[rownames(lx1)%in%lumLab2, ]
+lxLum=lx1[rownames(lx1)%in%lumLab2, ]
 lxLumFrac=t(lxLum)/colSums(lxLum)
 # 
  lxImm=lx1[rownames(lx1)%in%immlabels, ]
@@ -110,6 +112,23 @@ lxLumFrac=t(lxLum)/colSums(lxLum)
  barplot(lxStrFrac, beside=T, col=pal2sub, ylab = "proportion of stromal cells", las=2)
 
 ```
+
+Compare proportions between DCIS vs IDC? Here, need to omit the RBCs.
+Perform a proport
+
+```{r}
+NcellsTotal=colSums(lx1[-match(c("omit", "rbc"), rownames(lx1)), ])
+NImmuneTotal=colSums(lxImm)
+
+sapply(1:nrow(lxImm), function(x) prop.test(lxImm[x, ], NImmuneTotal)$p.value)
+
+# also test this for the tumo r component
+NTumTotal=colSums(lxLum)
+
+sapply(1:nrow(lxLum), function(x) prop.test(lxLum[x, ], NTumTotal)$p.value)
+
+```
+
 
 ### Expression heatmap
 
@@ -267,9 +286,43 @@ Here, we look at the values if we
 We use the last example in publication
 
 
-```{r, fig.height=6}
+```{r}
 all8mh=rbind(dcisdfall, idcdfall)
 #all8mh=all8mh[which(all8mh$type=="shift_omit_tum"), ]
 
 ggplot(all8mh, aes(x=comp, y=mean, col=samp))+facet_grid(~type)+geom_point()+geom_errorbar(aes(ymin=lower, ymax=upper))+theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+all8sam2=all9sam[which(all8mh$type=="shift_omit_tum"), ]
+
+lx2=unique(all8sam2$comp)
+
+Pval=rep(NA, length(unique(lx2)))
+
+for (i in 1:length(lx2)){
+  ax1=which(all8sam2$comp==lx2[i])
+  sde=(all8sam2$upper[ax1[2]]-all8sam2$lower[ax1[2]])/(2*1.96)
+  zv=abs(all8sam2$mean[ax1[2]]-all8sam2$mean[ax1[1]])/sde
+  Pval[i]=exp(-0.717*zv -0.416*zv^2)
+}
+
+names(Pval)=unique(lx2)
+p.adjust(Pval)
+```
+
+## Summary of the composition of case8 and case 9
+
+(for use with frequencies in cibersort)
+
+```{r}
+lxImmFracTot=data.frame(rbind(lxImmFrac9[ ,c(1:5)], lxImmFrac[ ,c(1:3, 6,5)]))
+lxImmFracTot$Type=rep(c("DCIS", "IDC"), 2)
+lxImmFracTot$Case=rep(c("Case9", "Case8"),each=2)
+      
+lxImmFracTotmelt=melt(lxImmFracTot, id.vars = c("Type", "Case"))
+
+ggplot(lxImmFracTotmelt, aes(x=Type, y=value, col=Case))+geom_point()+geom_line(aes(group=Case))+facet_wrap(~variable, scale="free_y")+
+  scale_color_manual(values=c("#619CFF", "#A58AFF"))
+
 ```
