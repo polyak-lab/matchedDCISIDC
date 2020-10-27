@@ -1,0 +1,16 @@
+sample	type	case	Color_group_1	Color_group_2
+1DCIS	DCIS	1	#56F70B	#fdae6b
+1IDC	IDC	1	#56F70B	#c51b8a
+8DCIS	DCIS	8	#39509F	#fdae6b
+8IDC	IDC	8	#39509F	#c51b8a
+9DCIS	DCIS	9	#CA202A	#fdae6b
+9IDC	IDC	9	#CA202A	#c51b8a
+2DCIS	DCIS	2	#ffff99	#fdae6b
+2IDC	IDC	2	#ffff99	#c51b8a
+3DCIS	DCIS	3	#6a3d9a	#fdae6b
+3IDC	IDC	3	#6a3d9a	#c51b8a
+5IDC	IDC	5	#ff7f00	#c51b8a
+8DCISstr	DCISstr	8	#39509F	#ffeda0
+8IDCstr	IDCstr	8	#39509F	#ffeda0
+9DCISstr	DCISstr	9	#CA202A	#ffeda0
+9IDCstr	IDCstr	9	#CA202A	#ffeda0
