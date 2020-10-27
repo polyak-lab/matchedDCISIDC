@@ -17,7 +17,7 @@ pal2sub=as.vector(pal2sub)
 
 RdBu=brewer.pal(11,"RdBu")
 
-load("data/RecurrenceCohort/cycIF/Final_cse8_data.RData")
+load("../data/RecurrenceCohort/cycIF/Final_cse8_data.RData")
 sampid="8dcis"
 palcols=pal1[c(4, 3:2, 5)]#cols_d4[c(4, 3:2, 5)]#pal1[c(4, 3:2, 5)]#cols_d4[c(4, 3:2, 5)]#pal1[c(4, 3:2, 5)]#cols_d4[c(4, 3:2, 5)] #edit this 
 
@@ -54,7 +54,7 @@ ppOutR=ppp(newdfR$XLocN, newdfR$YLocN, marks=newdfR$type, poly=windowOut$bdry)
 ## interactinf distance analysis
 ######################
 Ndist=30
-d1=nndist(ppOutR, by=marks(ppOutR))
+d1=nndist(ppOutR, by=factor(marks(ppOutR)))
 lx1a=which(ppOutR$marks=="Treg"& d1[ ,1]<Ndist)
 lx1b=which(ppOutR$marks=="CD8"& d1[ ,1]<Ndist)
 lx1c=which(ppOutR$marks=="CD4"& d1[ ,1]<Ndist)
@@ -86,7 +86,7 @@ for (i in 1:1000){
   
   ppOut=ppp(newdf$XLocN, newdf$YLocN, marks=newdf$type, poly=windowOut$bdry)
   
-  d1=nndist(ppOut, by=marks(ppOut))
+  d1=nndist(ppOut, by=factor(marks(ppOut)))
   lx1a=which(ppOut$marks=="Treg"& d1[ ,1]<Ndist)
   lx1b=which(ppOut$marks=="CD8"& d1[ ,1]<Ndist)
   lx1c=which(ppOut$marks=="CD4"& d1[ ,1]<Ndist)
@@ -131,26 +131,26 @@ ppInd=which(ppOutR$x>(xlimV[1]+gridsize) & ppOutR$x<(xlimV[2]-gridsize) & ppOutR
               ppOutR$y<(ylimV[2]-gridsize))
 #d1new=d1[ppInd, ]
 
-d2=nndist(ppOutR, by=marks(ppOutR), k=c(1:5))
+d2=nndist(ppOutR, by=factor(marks(ppOutR)), k=c(1:5))
 
 Dist1=d2[ ,grep("dist.1", colnames(d2))]
 knn3=sapply(names(amx1), function(x) rowMeans(d2[ ,grep(x, colnames(d2))[1:3]]))
 knn5=sapply(names(amx1), function(x) rowMeans(d2[ ,grep(x, colnames(d2))]))
 knnDistMatrix=abind(Dist1, knn3, knn5, along=3)
-Ctypes=levels(ppOutR$marks)[-1]
+Ctypes=levels(factor(ppOutR$marks))[-1]
 
 pdf(sprintf("~/Desktop/%s_knn_dist.pdf", sampid), width=9, height=5)
 par(mfrow=c(1, 3))
-#for (i in 1:3){
-  i=1
+for (i in 1:3){
+ # i=1
   ptest=matrix(NA, nrow=4, ncol=4)
   namtest=matrix(NA, nrow=4, ncol=4)
   for (j in 1:(length(Ctypes)-1)){
     for (k in (j+1):length(Ctypes)){
     ptest[j,k]=ks.test(knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i], 
                knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
-  #  ptest[j,k]=kSamples::ad.test(knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i], 
-  #                     knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
+   # ptest[j,k]=kSamples::ad.test(knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[j]),1, i], 
+   #                    knnDistMatrix[ which(ppOutR$marks[ppInd]==Ctypes[k]),1, i])$p.value
     namtest[j,k]=paste(Ctypes[j], Ctypes[k])
     }}
   
@@ -164,7 +164,7 @@ lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="CD8"),1, i]), lwd=2, col=p
 lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="CD4"),1, i]), lwd=2, col=palcols[3])
 lines(ecdf(knnDistMatrix[ which(ppOutR$marks[ppInd]=="Mac"),1, i]), lwd=2, col=palcols[4])
 legend("bottomright", legend=paste(names(pvals), round(pvals*1000)/1000), pch=1)
-#}
+}
 dev.off()
 
 ###############

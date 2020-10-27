@@ -83,6 +83,8 @@ Across the three cohorts, we see recurrent gains at 1q, 8q, 17 for example, as w
 
 ## Compare similarities between the samples
 
+FIND THIS!
+
 ```{r}
 load("data/exome_regions_profiled.RData")
 
@@ -128,7 +130,6 @@ for (i in 1:12){
 #TestB=cor(Tab2, method="spearman")
 colnames(TestB2)=names(CNVRecGRanges)
 heatmap.2(TestB2, scale="none", Rowv = NA, Colv = NA, col=brewer.pal(9, "Blues"), trace="none")
-
 ```
 
 Here, we see the proportion which is similar bewtween DCIS and IDC:

@@ -100,6 +100,7 @@ Additionally, the following external software was used:
 Additional in-house functions used are found in R scripts folder
 ```{r}
 source("extra_functions.R")
+
 ```
 
 ## Biological Annotation
@@ -140,7 +141,7 @@ List2b=lapply(1:ncol(List2), function(x) setdiff(unique(List2[ ,x]), ""))
 names(List2b)=colnames(List2)
 Exp2List=c(Exp2List, List2b)
 
-ImmSuppAPC=read.delim("geneLists//immune_Suppression.csv", header=T, stringsAsFactors = F, sep=",")
+ImmSuppAPC=read.delim("geneLists//immune_Suppression.csv", header=T, stringsAsFactors = F, sep="\t")
 ImmSuppAPC=lapply(1:ncol(ImmSuppAPC), function(x) setdiff(unique(ImmSuppAPC[ ,x]), ""))
 
 MHCpres=read.csv("geneLists/MHCloss.csv", header=F)
@@ -230,7 +231,7 @@ CytoGR=sort(CytoGR)
 
 
 # find the breast specific genes
-breastGeneList=unique(c(as.character(OncoList$Gene.Symbol[c(grep("breast", OncoList$Tumour.Types.Germline.),grep("breast", OncoList$Tumour.Types.Somatic.) )]),"MYC", "FGFR1", "FGFR2", "KMT2C"))
+breastGeneList=unique(c(as.character(OncoList$Gene.Symbol[c(grep("breast", OncoList$Tumour.Types.Germline.),grep("breast", OncoList$Tumour.Types.Somatic.) )]),"MYC", "FGFR1", "FGFR2", "KMT2C", "PTEN"))
 m1=match(breastGeneList, tx37$HUGO)
 
 txOncoList=tx37[na.omit(match(OncoList$Gene.Symbol, tx37$HUGO))]
@@ -312,26 +313,26 @@ par(mfrow=c(1,2))
 barplot(t(t(SummaryQP)/colSums(SummaryQP)), col=qpathPal, main="Tissue WSI", las=2, ylab="Proportion of cells")
 legend("topright", rownames(SummaryQP), col=qpathPal, pch=19, bty="n")
 
-plot(QPs[[8]]$CentroidX, QPs[[8]]$CentroidY, col=qpathPal[QPs[[8]]$CellType], main="example case 5 IDC", pch=".",
+plot(QPs[[8]]$CentroidX, QPs[[8]]$CentroidY, col=qpathPal[factor(QPs[[8]]$CellType)], main="example case 5 IDC", pch=".",
      xlab="X Coord", ylab="Y Coord")
 ```
 
 ## Exome
 
-Summary of the exome data coverage
+Summary of the exome data coverage: 
 
 ```{r}
-DIn=read.csv("data/Exome_QC.csv")
+DIn=read.csv("data/exomecoverage.csv")
 
 # barplot of mean target coverage
-barplot(DIn$hs_mean_target_coverage, ylab = "average coverage x", col=c(dcisidcCol, 3), names.arg = DIn$sample_alias, las=2)
+barplot(DIn[ ,10], ylab = "average coverage x", col=c(dcisidcCol, 3), names.arg = DIn$sample_alias, las=2)
 abline(v=c(3.2, 6.8, 10.4, 14, 17.6)+0.5, lty=2)
 
 # compare the percent target bases
-Pct=t(DIn[ ,c(6:11)])
+Pct=t(DIn[ ,c(2:9)])
 colnames(Pct)=DIn$sample_alias
-CNames=sapply(strsplit(rownames(Pct), "_"), function(x) x[length(x)])
-Pct=cbind(Pct, as.numeric(substr(CNames, 1, nchar(CNames)-1)))
+CNames=sapply(strsplit(rownames(Pct), "X"), function(x) x[2])
+Pct=cbind(Pct, CNames)
 
 
 par(mfrow=c(2, 3))
@@ -373,7 +374,7 @@ CNVRecGRanges=lapply(CNVRec, function(x) GRanges(seqnames = x$CONTIG, ranges=IRa
 
 
 ## Abba cohort
-APath="data/Abba2015/Abba_CNV_gatk/" #"data/Abba2015/acapseg/" #"~/Downloads/acapseg/" #"data/Abba2015/Abba_CNV_gatk/called_Regions/" # #"data/Abba2015/Abba_CNVs/"  #Abba_CNV_gatk/called_Regions/" # USE THIS ONE?
+APath="data/Abba2015/Abba_CNV_gatk/called_regions/" #"data/Abba2015/acapseg/" #"~/Downloads/acapseg/" #"data/Abba2015/Abba_CNV_gatk/called_Regions/" # #"data/Abba2015/Abba_CNVs/"  #Abba_CNV_gatk/called_Regions/" # USE THIS ONE?
 FilesIn=dir(APath, pattern =".seg")
 
 AbbaCNV=list()
@@ -435,7 +436,7 @@ barplot(MutTableR, beside=T, ylab="log10 number of mutations", col=brewer.pal(5,
         names.arg = paste(rep(c(1:3, 5, 8:9), each=2), c("DCIS", "IDC")), las=2, log="y", xlim=c(0, ncol(MutTableR)*6+2), legend.text = T,
         args.legend=list(x=ncol(MutTableR)*6 + 2, y=1000, bty = "n"))
 
-alllvl=unique(unlist(sapply(Mutall2, function(x) levels(x$Variant_Classification))))
+alllvl=unique(unlist(sapply(Mutall2, function(x) levels(factor(x$Variant_Classification)))))
 VarType=sapply(Mutall2, function(x) table(factor(x$Variant_Classification, levels=alllvl)))
 lx1=colSums(VarType)
 barplot(t(t(VarType)/lx1), xlim=c(0, nrow(VarType)+3), col=c(1:12), las=2, legend.text = T, args.legend=list(x=nrow(VarType) + 3, y=1, bty = "n"))
@@ -495,9 +496,11 @@ barplot(MutTable+1, beside=T, ylab="log10 number of mutations", col=brewer.pal(5
 
 We used HaplotypeCaller to determine coding variants in the normal samples . Below are the results from the recurrence set, showing how many variants are present in each case. They are overwhelmingly rsSNP sites, and do not appear to have a pathogenic effect. The top mutated genes are the mucin genes which are known to be highly variable, but the epigenetic regulator KMT2C also shows variation.
 
+
+SORT OUT THIS SECTION
 ```{r, fig.height=8, cache=T}
 Ont2=c("frameshift deletion", "frameshift insertion", "stop gained", "stop lost", "missense", "splice site")
-DCISNormals=read.delim("data/DontUpload//DCIS_cohort_normals_200103-140338_rmblank_coding.tsv", sep="\t")
+DCISNormals=read.delim("data/DontUpload/DCIS_cohort_normals_200103-140338_rmblank_coding.tsv", sep="\t")
 DCISNormals2=DCISNormals[which(DCISNormals$Sequence.Ontology%in%Ont2), ] # change this
 
 par(mfrow=c(2,2))
@@ -506,10 +509,14 @@ par(mfrow=c(2,2))
 allPatDCIS=table(unlist(strsplit(as.character(DCISNormals2$Samples), ";")))
 barplot(allPatDCIS, las=2, ylab="germline mutations found in each sample")
 
+
 ## overview of the clinical damage and rsSNP frequency
 rsFreq=table(DCISNormals2$rsID=="")
 
-barplot(rsFreq/sum(rsFreq), ylab="rsSNP location", names.arg = c("rsID", "non rsSNP"))
+par(mfrow=c(1,2))
+barplot(rsFreq/sum(rsFreq), ylab="rsSNP location", names.arg = c("rsID", "non rsSNP"), main="rsSNP frequency")
+Ax2=unlist(strsplit(DCISNormals2$Variant.AF, ";"))
+hist(as.numeric(Ax2), main="Variant Allele Frequency", xlab="VAF")
 
 clinsig=as.character(DCISNormals2$Clinical.Significance)
 clinsig[grep("protective", clinsig)]="protective"
@@ -553,6 +560,8 @@ barplot(allPatAbba, las=2, ylab="germline mutations found in each sample")
 
 ## overview of the clinical damage and rsSNP frequency
 rsFreq=table(AbbaNormals2$rsID=="")
+Ax2=unlist(strsplit(AbbaNormals2$Variant.AF, ";"))
+hist(as.numeric(Ax2), main="Variant Allele Frequency", xlab="VAF")
 
 
 barplot(rsFreq/sum(rsFreq), ylab="rsSNP location", names.arg = c("rsID", "non rsSNP"))
@@ -678,6 +687,8 @@ The following barplots will summarize 4 things:
 * proportion of patients with the same HLA alleles (e.g. A02:01 and A02:03 are considered consistent)
 * proportion of exactly the same HLA-types called (irrespective of patient)
 * proportion of the same HLA alleles called (irrespective of patient)
+
+FIND OPTITYPE DATA
 
 ```{r}
 

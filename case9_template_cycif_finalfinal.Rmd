@@ -244,6 +244,31 @@ sapply(1:nrow(lxLum), function(x) prop.test(lxLum[x, ], NImmuneTotal)$p.value)
 
 ```
 
+### CD8+ GZMB+ or Ki67+ population
+
+GZMB+ expression was rare in this cohort of cells, and was thus not detected as a distinct cluster.
+
+```{r}
+library(mclust)
+library(mixtools)
+
+
+## can also test overall GZMB+
+testCutgzmb=Mclust(all9sinh[,c("GRNZB_Nuclei")], G=2)# this seems to work ok
+table(testCutgzmb$classification[mx1], all9meta$type[mx1])
+
+## look for exhausted T cells
+mx1=which(all9meta$class%in%c("CD4", "CD8", "Foxp3")) 
+testCutki67=Mclust(all9sinh[ ,c("Ki67_Nuclei")], G=2)# this seems to work ok
+testCutPD1=Mclust(all9sinh[,c("PD1_Ring")], G=2)# this seems to work ok
+
+boxplot(all9sinh[mx1 ,c("PD1_Ring")]~testCutPD1$classification[mx1])
+table(testCutPD1$classification[mx1], all9meta$type[mx1])
+
+boxplot(all9sinh[,c("Ki67_Nuclei")]~testCutki67$classification)
+
+```
+
 ### Expression summary
 
 Here, we make a heatmap for the different clusters shown above based on luminal vs stromal markers. For each class, we sample 100 cells with replacement. The generated geatmaps will provide an idea of the markers which are expressed in the different cell types. Note that both immune and epithelial cells are featured in the maps to highlight the differences. The first 8 samples are epithelial related (lighter colors), and the final 5 are immune related (darker colors).

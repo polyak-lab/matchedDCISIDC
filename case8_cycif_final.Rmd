@@ -129,6 +129,52 @@ sapply(1:nrow(lxLum), function(x) prop.test(lxLum[x, ], NTumTotal)$p.value)
 
 ```
 
+## Identify subset of CD8 cells which are GZMB pos
+
+```{r}
+library(mclust)
+library(mixtools)
+mx1=which(case8_cellids$final2=="cd8") 
+testCutcd8=Mclust(case8_bck_mod[ mx1,c("GRNZB_Nuclei")], G=2)# this seems to work ok
+boxplot(case8_bck_mod[ mx1,"GRNZB_Nuclei"]~testCutcd8$classification)
+
+table(testCutcd8$classification)
+table(testCutcd8$classification, case8_cellids$type[mx1])
+
+## can also test overall GZMB+
+testCutgzmb=Mclust(case8_bck_mod[ ,c("GRNZB_Nuclei")], G=2)# this seems to work ok
+table(testCutgzmb$classification[mx1], case8_cellids$type[mx1])
+
+testCutKi67=Mclust(case8_bck_mod[ ,c("Ki67_Nuclei")], G=2)# this seems to work ok
+table(testCutKi67$classification[mx1], case8_cellids$type[mx1])
+
+
+case8_cellids$cd8list=case8_cellids$final2
+case8_cellids$cd8list[mx1]=paste(case8_cellids$cd8list[mx1], testCutgzmb$classification[mx1])
+```
+
+Where are they located?
+
+```{r}
+lx1=which(case8_cellids$type=="DCIS" & case8_cellids$cd8list%in%c("cd8 1", "cd8 2"))
+lx3=which(case8_cellids$type=="DCIS" & case8_cellids$cd8list=="myeop")
+lx2=which(case8_cellids$type=="DCIS" )
+plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="8 DCIS immune") #xlim=c(12500, 14000), ylim=c(30500, 34000))
+points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=as.numeric(factor(case8_cellids$cd8list[lx1]))+2, main='DCIS', pch=20, xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+points(case8_cellids$XLocN[lx3],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx3], col="grey85", main='DCIS', pch=".", xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+
+
+## example whole slide 8IDC immune
+## IDC
+lx1=which(case8_cellids$type=="IDC" & case8_cellids$cd8list%in%c("cd8 1", "cd8 2") & case8_cellids$scene!="scene005")
+lx2=which(case8_cellids$type=="IDC" & case8_cellids$scene!="scene005")
+lx3=which(case8_cellids$type=="IDC" & case8_cellids$cd8list=="myeop")
+plot(case8_cellids$XLocN[lx2],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx2], col="grey90", pch='.',  xlab="", ylab = "", main="8 DCIS immune") #xlim=c(12500, 14000), ylim=c(30500, 34000))
+points(case8_cellids$XLocN[lx1],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx1], col=as.numeric(factor(case8_cellids$cd8list[lx1]))+2, main='IDC', pch=20, cex=0.4)
+points(case8_cellids$XLocN[lx3],max(case8_cellids$YLocN)-case8_cellids$YLocN[lx3], col="grey85", main='DCIS', pch=".", xlim=c(15500, 22000), ylim=c(10000, 18000), cex=0.4)
+
+```
+
 
 ### Expression heatmap
 
